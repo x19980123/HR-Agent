@@ -1,0 +1,1724 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HR Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,560;9..144,700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #12231f;
+      --muted: #5a6f68;
+      --line: rgba(18, 35, 31, 0.12);
+      --surface: rgba(255, 255, 255, 0.78);
+      --surface-strong: #ffffff;
+      --accent: #0f766e;
+      --accent-deep: #0b5c56;
+      --accent-soft: #d9f3ef;
+      --warn: #9a6700;
+      --warn-soft: #fff4d6;
+      --danger: #b42318;
+      --danger-soft: #fdecea;
+      --ok: #0b6e4f;
+      --ok-soft: #e5f6ef;
+      --shadow: 0 18px 50px rgba(18, 35, 31, 0.08);
+      --radius: 18px;
+      --sidebar: 248px;
+      --font: "DM Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --display: "Fraunces", "Songti SC", Georgia, serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: var(--font);
+      color: var(--ink);
+      background:
+        radial-gradient(900px 420px at -10% -20%, #c8ebe4 0%, transparent 55%),
+        radial-gradient(700px 380px at 110% 0%, #dfe9f4 0%, transparent 50%),
+        linear-gradient(165deg, #f4f7f6 0%, #e8efec 45%, #f7f5f1 100%);
+    }
+    body::before {
+      content: "";
+      position: fixed; inset: 0; pointer-events: none; opacity: .35;
+      background-image: linear-gradient(rgba(18,35,31,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(18,35,31,.03) 1px, transparent 1px);
+      background-size: 28px 28px;
+    }
+    a { color: var(--accent-deep); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    button, .btn {
+      font: inherit; border: 1px solid var(--line); background: var(--surface-strong);
+      border-radius: 12px; padding: .55rem 1rem; cursor: pointer; font-weight: 600;
+      transition: transform .15s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease;
+    }
+    button:hover, .btn:hover { transform: translateY(-1px); border-color: rgba(15,118,110,.35); }
+    button:active, .btn:active { transform: translateY(0); }
+    .btn.primary, button.primary {
+      background: linear-gradient(180deg, #149388, var(--accent));
+      color: #fff; border-color: transparent; box-shadow: 0 8px 20px rgba(15,118,110,.25);
+    }
+    .btn.ghost { background: transparent; }
+    .btn.feishu {
+      display: inline-flex; align-items: center; justify-content: center; gap: .55rem;
+      width: 100%; padding: .9rem 1.1rem; font-size: 1.02rem;
+      background: linear-gradient(180deg, #4b86ff, #3370ff); color: #fff; border: 0;
+      border-radius: 14px; box-shadow: 0 12px 28px rgba(51,112,255,.28);
+    }
+    .hidden { display: none !important; }
+    .muted { color: var(--muted); }
+    .err { color: var(--danger); }
+    .ok { color: var(--ok); }
+
+    /* Login */
+    .login-shell {
+      min-height: 100vh; display: grid; place-items: center; padding: 2rem 1.25rem;
+      position: relative; z-index: 1;
+    }
+    .login-panel {
+      width: min(440px, 100%);
+      background: var(--surface);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,.65);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      padding: 2.2rem 2rem 1.8rem;
+      animation: rise .55s ease both;
+    }
+    .brand-mark {
+      width: 48px; height: 48px; border-radius: 14px;
+      background: linear-gradient(145deg, #14b8a6, #0f766e 55%, #134e4a);
+      display: grid; place-items: center; color: #fff; font-weight: 700; letter-spacing: .04em;
+      box-shadow: 0 10px 24px rgba(15,118,110,.3);
+      margin-bottom: 1.1rem;
+    }
+    .login-panel h1 {
+      font-family: var(--display); font-size: clamp(2rem, 4vw, 2.45rem);
+      margin: 0 0 .35rem; letter-spacing: -.03em; line-height: 1.1;
+    }
+    .login-panel .lead { margin: 0 0 1.5rem; color: var(--muted); line-height: 1.55; }
+    details.token-fallback { margin-top: 1.1rem; color: var(--muted); font-size: .92rem; }
+    details.token-fallback summary { cursor: pointer; }
+    label { display: block; font-size: .82rem; color: var(--muted); margin: .7rem 0 .28rem; font-weight: 600; }
+    input, textarea, select {
+      width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: .65rem .8rem;
+      font: inherit; background: rgba(255,255,255,.9); color: var(--ink);
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    input[type="checkbox"], input[type="radio"] {
+      width: 1.05rem; height: 1.05rem; min-width: 1.05rem; padding: 0;
+      border-radius: 4px; flex-shrink: 0; accent-color: var(--accent);
+      box-shadow: none;
+    }
+    label.check {
+      display: flex; align-items: center; gap: .55rem;
+      margin: .55rem 0 0; color: var(--ink); font-weight: 600; cursor: pointer;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none; border-color: rgba(15,118,110,.45);
+      box-shadow: 0 0 0 4px rgba(15,118,110,.12);
+    }
+    input[type="checkbox"]:focus, input[type="radio"]:focus { box-shadow: none; }
+    textarea { min-height: 140px; resize: vertical; }
+
+    /* App shell */
+    .app {
+      min-height: 100vh; display: grid; grid-template-columns: var(--sidebar) 1fr;
+      position: relative; z-index: 1;
+    }
+    .sidebar {
+      padding: 1.35rem 1rem 1.5rem;
+      border-right: 1px solid var(--line);
+      background: rgba(255,255,255,.55);
+      backdrop-filter: blur(14px);
+      position: sticky; top: 0; height: 100vh;
+      display: flex; flex-direction: column; gap: .35rem;
+    }
+    .sidebar .logo {
+      display: flex; align-items: center; gap: .7rem;
+      padding: .35rem .55rem 1.1rem; margin-bottom: .4rem;
+    }
+    .sidebar .logo strong {
+      font-family: var(--display); font-size: 1.35rem; letter-spacing: -.02em;
+    }
+    .sidebar .logo span { display: block; font-size: .78rem; color: var(--muted); font-weight: 500; }
+    .nav-btn {
+      width: 100%; text-align: left; background: transparent; border: 0;
+      border-radius: 12px; padding: .7rem .85rem; color: var(--ink);
+      display: flex; align-items: center; gap: .55rem;
+    }
+    .nav-btn:hover { background: rgba(15,118,110,.08); transform: none; }
+    .nav-btn.active {
+      background: var(--accent-soft); color: var(--accent-deep);
+      box-shadow: inset 0 0 0 1px rgba(15,118,110,.12);
+    }
+    .sidebar .spacer { flex: 1; }
+    .user-box {
+      padding: .85rem; border-radius: 14px; background: rgba(255,255,255,.7);
+      border: 1px solid var(--line); margin-top: .5rem;
+    }
+    .user-box .name { font-weight: 700; }
+    .user-box .meta { font-size: .8rem; color: var(--muted); margin-top: .15rem; }
+
+    .content { padding: 1.5rem 1.75rem 2.5rem; min-width: 0; }
+    .page-head {
+      display: flex; align-items: end; justify-content: space-between; gap: 1rem;
+      margin-bottom: 1.25rem; animation: rise .4s ease both;
+    }
+    .page-head h2 {
+      margin: 0; font-family: var(--display); font-size: 1.85rem; letter-spacing: -.02em;
+    }
+    .page-head p { margin: .25rem 0 0; color: var(--muted); }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid rgba(255,255,255,.7);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1.15rem 1.25rem;
+      margin-bottom: 1rem;
+      animation: rise .45s ease both;
+    }
+    .stats {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .85rem;
+    }
+    .stat {
+      padding: 1rem 1.05rem; border-radius: 16px;
+      background: linear-gradient(180deg, #fff, #f3faf8);
+      border: 1px solid var(--line);
+      transition: transform .18s ease;
+    }
+    .stat:hover { transform: translateY(-2px); }
+    .stat .k { font-size: .82rem; color: var(--muted); font-weight: 600; }
+    .stat .v {
+      font-family: var(--display); font-size: 1.85rem; margin-top: .25rem;
+      letter-spacing: -.03em;
+    }
+    .stat.warn { background: linear-gradient(180deg, #fff, var(--warn-soft)); }
+    .stat.ok { background: linear-gradient(180deg, #fff, var(--ok-soft)); }
+    .stat.danger { background: linear-gradient(180deg, #fff, var(--danger-soft)); }
+
+    .toolbar { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: .9rem; align-items: center; }
+    .chip-filter {
+      border-radius: 999px; padding: .35rem .8rem; font-size: .85rem; background: #fff;
+    }
+    .chip-filter.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+    table { width: 100%; border-collapse: collapse; font-size: .93rem; }
+    th {
+      text-align: left; padding: .7rem .45rem; color: var(--muted); font-size: .8rem;
+      font-weight: 700; border-bottom: 1px solid var(--line); text-transform: uppercase; letter-spacing: .04em;
+    }
+    td { padding: .85rem .45rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    tr { transition: background .15s ease; }
+    tbody tr:hover { background: rgba(15,118,110,.04); }
+    .badge {
+      display: inline-flex; align-items: center; padding: .2rem .55rem; border-radius: 999px;
+      font-size: .78rem; font-weight: 700; background: #eef2f1; color: var(--ink);
+    }
+    .badge.awaiting_reply, .badge.screened, .badge.screening, .badge.parsing { background: #e0f2fe; color: #075985; }
+    .badge.confirmed { background: var(--ok-soft); color: var(--ok); }
+    .badge.declined, .badge.rejected { background: var(--danger-soft); color: var(--danger); }
+    .badge.needs_human, .badge.failed { background: var(--warn-soft); color: var(--warn); }
+
+    .grid-2 { display: grid; grid-template-columns: 1.1fr .9fr; gap: 1rem; }
+    .section-title {
+      margin: 0 0 .65rem; font-size: 1rem; font-weight: 700;
+    }
+    .kv { display: grid; gap: .55rem; }
+    .kv .row {
+      display: grid; grid-template-columns: 100px 1fr; gap: .5rem;
+      padding: .55rem .65rem; border-radius: 12px; background: rgba(255,255,255,.7);
+      border: 1px solid var(--line);
+    }
+    .kv .row span { color: var(--muted); font-size: .82rem; font-weight: 600; }
+    .q-list { display: grid; gap: .65rem; }
+    .q-item {
+      padding: .85rem 1rem; border-radius: 14px; background: #fff;
+      border: 1px solid var(--line);
+    }
+    .q-item .cat {
+      font-size: .75rem; font-weight: 700; color: var(--accent-deep);
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    .q-item p { margin: .35rem 0 0; line-height: 1.5; }
+    .live-log {
+      margin-top: .85rem; max-height: 240px; overflow: auto;
+      border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.75);
+      padding: .55rem .7rem;
+    }
+    .live-log .log-line {
+      display: grid; grid-template-columns: 132px 1fr; gap: .5rem;
+      padding: .4rem 0; border-bottom: 1px dashed rgba(18,35,31,.08);
+      font-size: .86rem; line-height: 1.4;
+    }
+    .live-log .log-line:last-child { border-bottom: 0; }
+    .live-log .log-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .live-log .log-live {
+      display: inline-flex; align-items: center; gap: .35rem;
+      margin-top: .55rem; color: var(--accent-deep); font-size: .85rem; font-weight: 650;
+    }
+    .timeline { display: grid; gap: .45rem; }
+    .timeline .item {
+      display: grid; grid-template-columns: 140px 1fr; gap: .6rem;
+      padding: .55rem 0; border-bottom: 1px dashed var(--line); font-size: .88rem;
+    }
+    .empty {
+      text-align: center; padding: 2.5rem 1rem; color: var(--muted);
+    }
+    pre.raw {
+      white-space: pre-wrap; background: #0f1f1c; color: #d7ebe6;
+      border-radius: 14px; padding: .9rem 1rem; font-size: .8rem;
+      max-height: 260px; overflow: auto; margin: 0;
+    }
+    .alert {
+      padding: .85rem 1rem; border-radius: 14px; margin-bottom: 1rem; font-size: .92rem; line-height: 1.45;
+    }
+    .alert.warn { background: var(--warn-soft); color: var(--warn); border: 1px solid rgba(154,103,0,.2); }
+    .alert.danger { background: var(--danger-soft); color: var(--danger); border: 1px solid rgba(180,35,24,.15); }
+    .profile-block { margin-bottom: .9rem; }
+    .profile-block h4 { margin: 0 0 .45rem; font-size: .88rem; color: var(--muted); }
+    .tags { display: flex; flex-wrap: wrap; gap: .35rem; }
+    .tag {
+      background: var(--accent-soft); color: var(--accent-deep); border-radius: 999px;
+      padding: .2rem .55rem; font-size: .78rem; font-weight: 650;
+    }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(18,35,31,.45); z-index: 40;
+      display: grid; place-items: center; padding: 1rem;
+      animation: rise .2s ease both;
+    }
+    .modal {
+      width: min(640px, 100%); max-height: min(88vh, 900px); overflow: auto;
+      background: #fff; border-radius: 20px; padding: 1.25rem 1.35rem 1.35rem;
+      box-shadow: 0 24px 60px rgba(0,0,0,.18);
+    }
+    .modal h3 { margin: 0 0 .25rem; font-family: var(--display); font-size: 1.45rem; }
+    .modal-actions { display: flex; gap: .6rem; justify-content: flex-end; margin-top: 1rem; flex-wrap: wrap; }
+    .linkish { color: var(--accent-deep); font-weight: 650; cursor: pointer; background: none; border: 0; padding: 0; }
+    .toast {
+      position: fixed; right: 1.25rem; top: 1.25rem; z-index: 60;
+      background: #0f766e; color: #fff; padding: .75rem 1.05rem; border-radius: 12px;
+      box-shadow: 0 12px 30px rgba(15,118,110,.28); font-weight: 650;
+      animation: rise .25s ease both;
+    }
+    .toast.err { background: #b42318; }
+    .steps {
+      display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .45rem;
+      margin: 0 0 1rem;
+    }
+    .step {
+      position: relative; padding: .7rem .55rem; border-radius: 14px;
+      background: rgba(255,255,255,.7); border: 1px solid var(--line); text-align: center;
+      font-size: .78rem; font-weight: 700; color: var(--muted);
+    }
+    .step .n {
+      display: block; font-family: var(--display); font-size: 1.05rem; color: var(--ink);
+      margin-bottom: .15rem; letter-spacing: -.02em;
+    }
+    .step.done { background: var(--ok-soft); border-color: rgba(11,110,79,.22); color: var(--ok); }
+    .step.done .n { color: var(--ok); }
+    .step.current { background: var(--accent-soft); border-color: rgba(15,118,110,.35); color: var(--accent-deep); }
+    .step.current .n { color: var(--accent-deep); }
+    .step.fail { background: var(--danger-soft); border-color: rgba(180,35,24,.25); color: var(--danger); }
+    .step.fail .n { color: var(--danger); }
+    .step.warn { background: var(--warn-soft); border-color: rgba(154,103,0,.28); color: var(--warn); }
+    .step.warn .n { color: var(--warn); }
+    .parse-issues { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .55rem; }
+    .parse-issues .tag { background: var(--warn-soft); color: var(--warn); }
+    .create-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(280px, .9fr);
+      gap: 1rem;
+      align-items: start;
+    }
+    .create-layout .panel { margin-bottom: 0; }
+    .create-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0 .85rem;
+    }
+    .create-fields .full { grid-column: 1 / -1; }
+    .create-fields textarea { min-height: 160px; }
+    .create-side { position: sticky; top: 1rem; }
+    .create-side .progress-box,
+    .create-side .hint-box {
+      margin-top: 0; min-height: 280px;
+    }
+    .hint-box {
+      padding: 1.15rem 1.2rem; border-radius: 16px;
+      background: linear-gradient(180deg, #fff, #f3faf8); border: 1px solid var(--line);
+    }
+    .hint-box h4 { margin: 0 0 .55rem; font-size: 1rem; }
+    .hint-box ol { margin: .4rem 0 0; padding-left: 1.15rem; color: var(--muted); line-height: 1.65; }
+    .hint-box li { margin: .2rem 0; }
+    .progress-box {
+      margin-top: 1rem; padding: 1rem 1.05rem; border-radius: 16px;
+      background: linear-gradient(180deg, #fff, #f3faf8); border: 1px solid var(--line);
+    }
+    .progress-box h4 { margin: 0 0 .75rem; font-size: .95rem; }
+    .progress-steps { display: grid; gap: .45rem; }
+    .progress-step {
+      display: grid; grid-template-columns: 28px 1fr auto; gap: .55rem; align-items: center;
+      padding: .55rem .65rem; border-radius: 12px; border: 1px solid transparent;
+      font-size: .9rem;
+    }
+    .progress-step .dot {
+      width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+      font-size: .72rem; font-weight: 800; background: #eef2f1; color: var(--muted);
+    }
+    .progress-step.pending { color: var(--muted); }
+    .progress-step.current {
+      background: var(--accent-soft); border-color: rgba(15,118,110,.25); color: var(--accent-deep);
+    }
+    .progress-step.current .dot { background: var(--accent); color: #fff; }
+    .progress-step.done { color: var(--ok); }
+    .progress-step.done .dot { background: var(--ok-soft); color: var(--ok); }
+    .progress-step.fail { background: var(--danger-soft); border-color: rgba(180,35,24,.2); color: var(--danger); }
+    .progress-step.fail .dot { background: var(--danger); color: #fff; }
+    .progress-step.warn { background: var(--warn-soft); border-color: rgba(154,103,0,.22); color: var(--warn); }
+    .progress-live { margin-top: .65rem; font-size: .85rem; color: var(--muted); }
+    .progress-live strong { color: var(--accent-deep); }
+    .spinner {
+      display: inline-block; width: .85rem; height: .85rem; border-radius: 50%;
+      border: 2px solid rgba(15,118,110,.25); border-top-color: var(--accent);
+      animation: spin .7s linear infinite; vertical-align: -2px; margin-right: .35rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (max-width: 980px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar {
+        position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--line);
+      }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid-2 { grid-template-columns: 1fr; }
+      .create-layout { grid-template-columns: 1fr; }
+      .create-fields { grid-template-columns: 1fr; }
+      .create-side { position: static; }
+      .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .timeline .item, .kv .row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div id="login" class="login-shell">
+    <section class="login-panel">
+      <div class="brand-mark">HR</div>
+      <h1>HR Agent</h1>
+      <p class="lead">招聘流程辅助工作台：筛简历、约面试、跟催回复，面试确认后再出题。<br/>HR 用飞书登录申请加入；审批通过后开通系统权限。面试官日历共享请在飞书侧配置。</p>
+      <div id="feishuBox" class="hidden">
+        <a class="btn feishu" id="feishuLogin" href="/v1/auth/feishu/login">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7.5h16v9H4v-9Z" stroke="currentColor" stroke-width="1.8"/><path d="M8 12h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          飞书登录 / 申请加入
+        </a>
+      </div>
+      <p id="loginErr" class="err" style="margin-top:.85rem;min-height:1.2em"></p>
+      <p id="loginInfo" class="muted" style="margin-top:.35rem;min-height:1.2em;color:var(--accent-deep)"></p>
+      <details class="token-fallback" id="tokenBox">
+        <summary>开发备用：API Token</summary>
+        <label>HR API Token</label>
+        <input id="tokenInput" type="password" placeholder="粘贴 HR_API_TOKEN" />
+        <div style="margin-top:.8rem"><button class="btn primary" id="loginBtn">进入工作台</button></div>
+      </details>
+    </section>
+  </div>
+
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="brand-mark" style="width:40px;height:40px;margin:0;font-size:.85rem">HR</div>
+        <div>
+          <strong>HR Agent</strong>
+          <span>招聘辅助工作台</span>
+        </div>
+      </div>
+      <button class="nav-btn active" data-v="stats">总览</button>
+      <button class="nav-btn" data-v="apps">申请</button>
+      <button class="nav-btn" data-v="human">人工台</button>
+      <button class="nav-btn" data-v="create">上传简历</button>
+      <button class="nav-btn" data-v="jds">岗位 JD</button>
+      <button class="nav-btn" data-v="bank">题库 RAG</button>
+      <button class="nav-btn hidden" data-v="staff" id="navStaff">成员管理</button>
+      <div class="spacer"></div>
+      <div class="user-box">
+        <div class="name" id="userChip">—</div>
+        <div class="meta" id="userMeta">飞书已登录</div>
+        <button class="btn ghost" id="logout" style="width:100%;margin-top:.65rem">退出登录</button>
+      </div>
+    </aside>
+    <main class="content">
+      <section id="view-stats"></section>
+      <section id="view-apps" class="hidden"></section>
+      <section id="view-human" class="hidden"></section>
+      <section id="view-create" class="hidden"></section>
+      <section id="view-jds" class="hidden"></section>
+      <section id="view-bank" class="hidden"></section>
+      <section id="view-staff" class="hidden"></section>
+      <section id="view-detail" class="hidden"></section>
+    </main>
+  </div>
+  <div id="modalRoot"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let token = sessionStorage.getItem("hr_api_token") || "";
+    let statusFilter = "";
+    const loginErrors = {
+      access_denied: "你取消了飞书授权",
+      missing_code: "未拿到授权码",
+      bad_state: "登录状态校验失败，请重试",
+      token_exchange: "换取飞书凭证失败，请检查应用密钥与权限",
+      user_info: "获取飞书用户信息失败，请开通用户信息相关权限",
+      not_allowed: "当前飞书账号不是启用中的 HR，无法进入系统",
+      join_failed: "提交加入申请失败，请稍后重试",
+      account_disabled: "账号已被管理员停用，无法登录或重新申请。请联系管理员启用。",
+      not_hr: "你的账号不是 HR，无法登录本系统。如需开通请联系管理员。",
+      session: "创建会话失败",
+    };
+    const loginInfos = {
+      join_submitted: "已提交加入申请（open_id 已由飞书自动带回），请等待管理员在「成员管理」中审批。",
+      join_pending: "你的加入申请仍在审批中，请耐心等待管理员处理。",
+    };
+    const statusLabel = {
+      awaiting_reply: "待回复", confirmed: "已确认", declined: "已拒绝",
+      needs_human: "需人工", rejected: "未通过", screened: "已筛选",
+      parsing: "解析中", screening: "筛选中", failed: "失败", uploaded: "已上传",
+      questions_ready: "题目就绪",
+    };
+    const issueLabel = {
+      empty_text: "简历正文为空",
+      empty_profile: "画像实质为空",
+      low_confidence: "置信度过低",
+      education_missing: "教育经历缺失",
+      experience_missing: "工作经历缺失",
+      no_skills: "无技能信息",
+      no_years: "年限不明",
+      years_unclear: "年限不明",
+    };
+
+    async function api(path, opts = {}) {
+      const headers = Object.assign({}, opts.headers || {});
+      if (token) headers["Authorization"] = "Bearer " + token;
+      if (opts.json) {
+        headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(opts.json);
+      }
+      const res = await fetch(path, { ...opts, headers, credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText || "request failed");
+      return data;
+    }
+
+    function showView(name) {
+      ["stats", "apps", "human", "create", "jds", "bank", "staff", "detail"].forEach((v) => {
+        $("view-" + v).classList.toggle("hidden", v !== name);
+      });
+      document.querySelectorAll(".nav-btn").forEach((b) => {
+        b.classList.toggle("active", b.getAttribute("data-v") === name);
+      });
+    }
+
+    function badge(status) {
+      const label = statusLabel[status] || status || "-";
+      return `<span class="badge ${esc(status || "")}">${esc(label)}</span>`;
+    }
+
+    let currentIsAdmin = false;
+    async function enterApp(me) {
+      $("login").classList.add("hidden");
+      $("app").classList.remove("hidden");
+      const name = (me && me.user && me.user.name) || "已登录";
+      currentIsAdmin = !!(me && (me.is_admin || (me.user && me.user.is_admin)));
+      $("userChip").textContent = name;
+      $("userMeta").textContent = (me.auth === "feishu" ? "飞书账号" : "API Token") + (currentIsAdmin ? " · 管理员" : "");
+      const navStaff = $("navStaff");
+      if (navStaff) navStaff.classList.toggle("hidden", !currentIsAdmin);
+      await renderStats();
+      showView("stats");
+    }
+
+    async function boot() {
+      const params = new URLSearchParams(location.search);
+      const errKey = params.get("login_error");
+      const infoKey = params.get("login_info");
+      if (errKey) {
+        $("loginErr").textContent = loginErrors[errKey] || ("登录失败: " + errKey);
+        history.replaceState({}, "", "/admin/");
+      }
+      if (infoKey) {
+        $("loginInfo").textContent = loginInfos[infoKey] || infoKey;
+        history.replaceState({}, "", "/admin/");
+      }
+      try {
+        const cfg = await fetch("/v1/auth/config", { credentials: "include" }).then((r) => r.json());
+        if (cfg.feishu_login) $("feishuBox").classList.remove("hidden");
+        if (!cfg.token_login) $("tokenBox").classList.add("hidden");
+      } catch (_) {}
+      try {
+        const me = await api("/v1/auth/me");
+        await enterApp(me);
+      } catch (_) {}
+    }
+
+    $("loginBtn").onclick = async () => {
+      token = $("tokenInput").value.trim();
+      sessionStorage.setItem("hr_api_token", token);
+      $("loginErr").textContent = "";
+      try { await enterApp(await api("/v1/auth/me")); }
+      catch (e) { $("loginErr").textContent = e.message; }
+    };
+    $("logout").onclick = async () => {
+      sessionStorage.removeItem("hr_api_token");
+      token = "";
+      try { await api("/v1/auth/logout", { method: "POST", json: {} }); } catch (_) {}
+      location.href = "/admin/";
+    };
+    document.querySelector(".sidebar").onclick = async (e) => {
+      const b = e.target.closest(".nav-btn");
+      if (!b) return;
+      const v = b.getAttribute("data-v");
+      if (v !== "detail") stopDetailPoll();
+      if (v === "stats") await renderStats();
+      if (v === "apps") await renderApps();
+      if (v === "human") await renderHumanDesk();
+      if (v === "create") await renderCreate();
+      if (v === "jds") await renderJDs();
+      if (v === "bank") await renderBank();
+      if (v === "staff") {
+        if (!currentIsAdmin) { showToast("仅系统管理员可进入成员管理", true); return; }
+        await renderStaff();
+      }
+      showView(v);
+    };
+
+    async function renderStats() {
+      const s = await api("/v1/admin/stats");
+      $("view-stats").innerHTML = `
+        <div class="page-head">
+          <div>
+            <h2>总览</h2>
+            <p>一眼看清招聘漏斗与待办。</p>
+          </div>
+          <button class="btn" id="refreshStats">刷新</button>
+        </div>
+        <div class="stats">
+          <div class="stat"><div class="k">全部申请</div><div class="v">${s.total || 0}</div></div>
+          <div class="stat"><div class="k">近 7 日新建</div><div class="v">${s.created_last_7d || 0}</div></div>
+          <div class="stat warn"><div class="k">待候选人回复</div><div class="v">${s.awaiting_reply || 0}</div></div>
+          <div class="stat ok"><div class="k">已确认面试</div><div class="v">${s.confirmed || 0}</div></div>
+          <div class="stat danger"><div class="k">已拒绝</div><div class="v">${s.declined || 0}</div></div>
+          <div class="stat warn"><div class="k">需人工处理</div><div class="v">${s.needs_human || 0}</div></div>
+          <div class="stat"><div class="k">筛选未通过</div><div class="v">${s.rejected || 0}</div></div>
+          <div class="stat"><div class="k">状态种类</div><div class="v">${Object.keys(s.by_status || {}).length}</div></div>
+        </div>
+        <div class="panel" style="margin-top:1rem">
+          <div class="section-title">状态分布</div>
+          <div class="kv">
+            ${Object.entries(s.by_status || {}).map(([k, v]) =>
+              `<div class="row"><span>${esc(statusLabel[k] || k)}</span><strong>${v}</strong></div>`
+            ).join("") || `<div class="empty">暂无数据</div>`}
+          </div>
+        </div>`;
+      $("refreshStats").onclick = () => renderStats();
+    }
+
+    async function renderApps() {
+      const q = statusFilter ? ("?status=" + encodeURIComponent(statusFilter)) : "";
+      const data = await api("/v1/admin/applications" + q);
+      const filters = ["", "awaiting_reply", "confirmed", "declined", "needs_human", "rejected"];
+      const rows = (data.items || []).map((a) => `
+        <tr>
+          <td><a href="#" data-id="${a.id}">${esc((a.candidate_name || "未命名").trim() || a.id.slice(0,8))}</a>
+            <div class="muted" style="font-size:.78rem;margin-top:.15rem">${esc(a.id.slice(0, 8))}…</div></td>
+          <td>${esc(a.candidate_email || "-")}</td>
+          <td>${badge(a.status)}</td>
+          <td>${esc(a.jd_id || "-")}</td>
+          <td class="muted">${fmtTime(a.updated_at)}</td>
+        </tr>`).join("");
+      $("view-apps").innerHTML = `
+        <div class="page-head">
+          <div><h2>申请</h2><p>跟进每一位候选人的流程状态。</p></div>
+          <button class="btn primary" id="goCreate">新建申请</button>
+        </div>
+        <div class="panel">
+          <div class="toolbar">
+            ${filters.map((f) =>
+              `<button class="chip-filter ${statusFilter===f?"active":""}" data-f="${f}">${f?esc(statusLabel[f]||f):"全部"}</button>`
+            ).join("")}
+          </div>
+          <table>
+            <thead><tr><th>候选人</th><th>邮箱</th><th>状态</th><th>岗位</th><th>更新</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="5"><div class="empty">暂无申请，先去上传一份简历吧</div></td></tr>`}</tbody>
+          </table>
+        </div>`;
+      $("goCreate").onclick = async () => { await renderCreate(); showView("create"); };
+      $("view-apps").onclick = async (e) => {
+        const chip = e.target.closest(".chip-filter");
+        if (chip) {
+          statusFilter = chip.getAttribute("data-f") || "";
+          await renderApps();
+          return;
+        }
+        const a = e.target.closest("a[data-id]");
+        if (!a) return;
+        e.preventDefault();
+        await renderDetail(a.getAttribute("data-id"));
+        showView("detail");
+      };
+    }
+
+    function renderProfile(profile) {
+      const p = profile || {};
+      const edu = Array.isArray(p.education) ? p.education : [];
+      const exp = Array.isArray(p.experiences) ? p.experiences : [];
+      const skills = Array.isArray(p.skills) ? p.skills : [];
+      if (!p.name && !edu.length && !exp.length && !skills.length) {
+        return `<div class="empty">暂无画像（解析失败或未生成）</div>`;
+      }
+      return `
+        <div class="kv" style="margin-bottom:.8rem">
+          <div class="row"><span>姓名</span><strong>${esc(p.name || "-")}</strong></div>
+          <div class="row"><span>邮箱</span><strong>${esc(p.email || "-")}</strong></div>
+          <div class="row"><span>电话</span><strong>${esc(p.phone || "-")}</strong></div>
+          <div class="row"><span>总年限</span><strong>${esc(p.total_years ?? "-")}</strong></div>
+          <div class="row"><span>解析置信</span><strong>${esc(p.parse_confidence ?? "-")}</strong></div>
+        </div>
+        <div class="profile-block">
+          <h4>技能</h4>
+          <div class="tags">${skills.length ? skills.map((s) => `<span class="tag">${esc(s)}</span>`).join("") : `<span class="muted">无</span>`}</div>
+        </div>
+        <div class="profile-block">
+          <h4>教育经历</h4>
+          ${edu.filter((e) => e.school || (e.major && e.major !== "未知") || (e.degree && e.degree !== "未知")).length
+            ? edu.filter((e) => e.school || (e.major && e.major !== "未知") || (e.degree && e.degree !== "未知")).map((e) =>
+              `<div class="q-item"><p><strong>${esc(e.school || "（学校未识别）")}</strong>${e.degree && e.degree !== "未知" ? " · " + esc(e.degree) : ""}${e.major && e.major !== "未知" ? " · " + esc(e.major) : ""}${e.end_year ? " · " + esc(e.end_year) : ""}</p></div>`
+            ).join("")
+            : `<div class="muted">未识别到教育经历</div>`}
+        </div>
+        <div class="profile-block">
+          <h4>工作经历</h4>
+          ${exp.filter((e) => e.company || e.title || (e.highlights || []).length).length
+            ? exp.filter((e) => e.company || e.title || (e.highlights || []).length).map((e) =>
+              `<div class="q-item"><div class="cat">${esc(e.company || "（公司未识别）")}</div><p>${esc(e.title || "")}${e.years ? " · " + esc(e.years) + " 年" : ""}</p>
+               ${(e.highlights || []).length ? `<p class="muted">${esc((e.highlights || []).join("；"))}</p>` : ""}</div>`
+            ).join("")
+            : `<div class="muted">未识别到工作经历</div>`}
+        </div>
+        ${(p.issues || []).length ? `<div class="alert warn">解析提示：${esc((p.issues || []).join("；"))}</div>` : ""}
+      `;
+    }
+
+    let detailPollTimer = null;
+    let detailWatchId = "";
+    function stopDetailPoll() {
+      if (detailPollTimer) {
+        clearInterval(detailPollTimer);
+        detailPollTimer = null;
+      }
+      detailWatchId = "";
+    }
+    function isProcessingStatus(st) {
+      return ["uploaded", "parsing", "screening", "screened"].includes(st);
+    }
+    const actionLabel = {
+      application_created: "已创建申请",
+      parse_started: "开始解析简历",
+      screen_started: "开始岗位筛选",
+      screened: "筛选通过",
+      rejected_by_screen: "筛选未通过",
+      needs_human_after_parse: "解析不足，转人工",
+      invite_preparing: "准备发送邀约",
+      invite_enqueued: "邀约邮件已入队",
+      notify_enqueued: "通知邮件已入队",
+      retry_parse: "触发重试解析",
+      pipeline_failed: "流程失败",
+      human_approved: "人工通过",
+      interview_confirmed: "候选人已确认面试",
+      interview_declined: "候选人已拒绝",
+      questions_generated: "面试题已生成",
+      questions_failed: "面试题生成失败",
+      confirm_email_failed: "确认函发送失败",
+      reschedule_slots_refreshed: "已刷新可选时段",
+      needs_human: "转人工处理",
+    };
+    function canRetryParse(status) {
+      return ["needs_human", "rejected", "failed", "uploaded", "parsing", "screening"].includes(status);
+    }
+    function canHumanApprove(status) {
+      return ["needs_human", "rejected", "failed", "screened", "questions_ready"].includes(status);
+    }
+    function renderLiveLog(audits, processing) {
+      const rows = (audits || []).slice().reverse(); // oldest first for reading
+      const lines = rows.length
+        ? rows.map((a) => {
+            const label = actionLabel[a.action] || a.action;
+            const st = a.after_status ? ` → ${statusLabel[a.after_status] || a.after_status}` : "";
+            const detail = a.detail && (a.detail.reason || a.detail.error)
+              ? `（${a.detail.reason || a.detail.error}）` : "";
+            return `<div class="log-line"><div class="log-time">${esc(fmtTime(a.created_at))}</div>
+              <div><strong>${esc(label)}</strong>${esc(st)}${esc(detail)}</div></div>`;
+          }).join("")
+        : `<div class="muted">暂无处理日志</div>`;
+      return `<div class="section-title" style="margin-top:.9rem">处理日志 ${processing ? `<span class="spinner"></span>` : ""}</div>
+        <div class="live-log" id="detailLiveLog">
+          ${lines}
+          ${processing ? `<div class="log-live"><span class="spinner"></span>处理中，日志自动刷新…</div>` : ""}
+        </div>`;
+    }
+    function renderStepper(status) {
+      const steps = [
+        { key: "upload", label: "上传" },
+        { key: "parse", label: "解析" },
+        { key: "screen", label: "筛选" },
+        { key: "schedule", label: "约面" },
+        { key: "reply", label: "回复" },
+        { key: "done", label: "完成" },
+      ];
+      let idx = 0;
+      let mode = "current"; // current | fail | warn
+      switch (status) {
+        case "uploaded": idx = 0; break;
+        case "parsing": idx = 1; break;
+        case "screening": idx = 2; break;
+        case "needs_human": idx = 1; mode = "warn"; break;
+        case "failed": idx = 1; mode = "fail"; break;
+        case "rejected": idx = 2; mode = "fail"; break;
+        case "screened": idx = 3; break;
+        case "questions_ready": idx = 3; break;
+        case "awaiting_reply": idx = 4; break;
+        case "confirmed": idx = 5; break;
+        case "declined": idx = 5; mode = "fail"; break;
+        default: idx = 0;
+      }
+      return `<div class="steps">${steps.map((s, i) => {
+        let cls = "step";
+        if (i < idx) cls += " done";
+        else if (i === idx) cls += mode === "fail" ? " fail" : mode === "warn" ? " warn" : " current";
+        return `<div class="${cls}"><span class="n">${i + 1}</span>${esc(s.label)}</div>`;
+      }).join("")}</div>`;
+    }
+    function renderParseReason(app) {
+      const errMsg = app.error_message || "";
+      const issues = (app.profile && app.profile.issues) || [];
+      const mapped = issues.map((i) => issueLabel[i] || i);
+      const show = app.status === "failed" || app.status === "needs_human" || app.status === "rejected" || errMsg || mapped.length;
+      if (!show) return "";
+      const title = app.status === "failed" ? "流程失败"
+        : app.status === "needs_human" ? "需人工处理（解析/流程未自动通过）"
+        : app.status === "rejected" ? "筛选未通过"
+        : "提示";
+      const tone = app.status === "failed" || app.status === "rejected" ? "danger" : "warn";
+      return `<div class="alert ${tone}">
+        <strong>${title}</strong>
+        <div style="margin-top:.35rem">${esc(errMsg || (mapped.length ? mapped.join("；") : "请检查简历是否可读，或使用人工操作继续。"))}</div>
+        ${mapped.length ? `<div class="parse-issues">${mapped.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : ""}
+        <div class="muted" style="margin-top:.55rem;font-size:.85rem">
+          人工流程：① 下载简历核对 → ②「重试解析」（可粘贴文本）→ ③ 仍异常则「人工通过并约面」绕过自动筛选。
+        </div>
+      </div>`;
+    }
+
+    async function renderHumanDesk() {
+      const [nh, rj, fl] = await Promise.all([
+        api("/v1/admin/applications?status=needs_human"),
+        api("/v1/admin/applications?status=rejected"),
+        api("/v1/admin/applications?status=failed"),
+      ]);
+      const items = [...(nh.items || []), ...(rj.items || []), ...(fl.items || [])]
+        .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+      const rows = items.map((a) => `
+        <tr>
+          <td><a href="#" data-id="${a.id}">${esc((a.candidate_name || "未命名").trim() || a.id.slice(0,8))}</a>
+            <div class="muted" style="font-size:.78rem;margin-top:.15rem">${esc(a.id.slice(0, 8))}…</div></td>
+          <td>${esc(a.candidate_email || "-")}</td>
+          <td>${badge(a.status)}</td>
+          <td class="muted">${fmtTime(a.updated_at)}</td>
+          <td style="display:flex;gap:.4rem;flex-wrap:wrap">
+            <button class="btn" data-open="${a.id}">处理</button>
+            ${canRetryParse(a.status) ? `<button class="btn" data-retry="${a.id}">重试解析</button>` : ""}
+            ${canHumanApprove(a.status) ? `<button class="btn primary" data-approve="${a.id}">人工通过</button>` : ""}
+          </td>
+        </tr>`).join("");
+      $("view-human").innerHTML = `
+        <div class="page-head">
+          <div>
+            <h2>人工台</h2>
+            <p>汇聚「需人工 / 未通过 / 失败」申请：重试解析或人工通过约面。</p>
+          </div>
+          <button class="btn" id="refreshHuman">刷新</button>
+        </div>
+        <div class="panel">
+          <div class="alert" style="background:var(--accent-soft);color:var(--accent-deep);border:1px solid rgba(15,118,110,.2);margin-bottom:1rem">
+            <strong>人工处理流程</strong>
+            <div style="margin-top:.35rem;line-height:1.55">
+              1. 打开详情，查看步骤条与解析失败原因，下载原简历核对。<br/>
+              2. 扫描版 PDF：文本层为空时会自动 OCR；仍失败可粘贴文本后「重试解析」。<br/>
+              3. 确认人选可过：点「人工通过并约面」→ 系统发邀约邮件并占飞书时段（跳过自动筛选）。
+            </div>
+          </div>
+          <table>
+            <thead><tr><th>候选人</th><th>邮箱</th><th>状态</th><th>更新</th><th>操作</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="5"><div class="empty">暂无待人工处理的申请</div></td></tr>`}</tbody>
+          </table>
+        </div>`;
+      $("refreshHuman").onclick = () => renderHumanDesk();
+      $("view-human").onclick = async (e) => {
+        const open = e.target.closest("[data-open], a[data-id]");
+        if (open) {
+          e.preventDefault();
+          const id = open.getAttribute("data-open") || open.getAttribute("data-id");
+          await renderDetail(id);
+          showView("detail");
+          return;
+        }
+        const retry = e.target.closest("[data-retry]");
+        if (retry) {
+          const id = retry.getAttribute("data-retry");
+          retry.disabled = true;
+          try {
+            await api("/v1/admin/applications/" + id + "/retry-parse", { method: "POST", json: {} });
+            showToast("已重试解析");
+            await renderHumanDesk();
+          } catch (err) {
+            showToast(err.message || "重试失败", true);
+            retry.disabled = false;
+          }
+          return;
+        }
+        const ap = e.target.closest("[data-approve]");
+        if (ap) {
+          const id = ap.getAttribute("data-approve");
+          if (!confirm("确认人工通过并发送面试邀约？")) return;
+          ap.disabled = true;
+          try {
+            await api("/v1/admin/applications/" + id + "/human/approve", { method: "POST", json: {} });
+            showToast("已人工通过并约面");
+            await renderHumanDesk();
+          } catch (err) {
+            showToast(err.message || "操作失败", true);
+            ap.disabled = false;
+          }
+        }
+      };
+    }
+
+    async function renderDetail(id) {
+      stopDetailPoll();
+      const app = await api("/v1/admin/applications/" + id);
+      const questions = Array.isArray(app.questions) ? app.questions : [];
+      const slots = app.slots || [];
+      const audits = app.audit || [];
+      const screen = app.screen || {};
+      const jd = app.jd || {};
+      const canRetry = canRetryParse(app.status);
+      const canApprove = canHumanApprove(app.status);
+      const processing = isProcessingStatus(app.status);
+      $("view-detail").innerHTML = `
+        <div class="page-head">
+          <div>
+            <h2>${esc(app.candidate_name || "候选人")}</h2>
+            <p>${esc(app.candidate_email || "")} · <span id="detailStatusBadge">${badge(app.status)}</span>
+              ${app.has_resume ? ` · <button class="linkish" id="dlResume">下载简历附件（${esc(app.resume_name || "resume")}）</button>` : " · <span class='muted'>无简历文件</span>"}
+            </p>
+          </div>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+            <button class="btn" id="backApps">返回列表</button>
+            ${canRetry ? `<button class="btn" id="retryBtn">重试解析</button>` : ""}
+            ${canApprove ? `<button class="btn primary" id="approveBtn">${app.status === "rejected" || app.status === "failed" ? "未通过→人工通过并约面" : "人工通过并约面"}</button>` : ""}
+          </div>
+        </div>
+        <div class="panel">
+          <div class="section-title">流程步骤</div>
+          <div id="detailStepper">${renderStepper(app.status)}</div>
+          ${renderParseReason(app)}
+          <div id="detailLogWrap">${renderLiveLog(audits, processing)}</div>
+          ${canRetry ? `<label style="margin-top:.85rem">重试时可粘贴简历全文（扫描 PDF 推荐）</label>
+            <textarea id="retryText" placeholder="可选：粘贴可读简历文本后点「重试解析」…" style="min-height:90px"></textarea>` : ""}
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="section-title">筛选结果</div>
+            <div class="kv">
+              <div class="row"><span>岗位</span><strong>${esc(jd.title || app.jd_id || "-")}</strong></div>
+              <div class="row"><span>总分</span><strong>${esc(screen.weighted_total ?? "-")}</strong></div>
+              <div class="row"><span>硬性否决</span><strong>${esc((screen.hard_fail_reasons || []).join("；") || "无")}</strong></div>
+            </div>
+            <div class="section-title" style="margin-top:1rem">面试时段（确认后才写入飞书日程）</div>
+            ${slots.length ? slots.map((s) =>
+              `<div class="q-item"><div class="cat">${esc(statusLabel[s.status] || s.status)}</div>
+               <p>${fmtTime(s.starts_at)} — ${fmtTime(s.ends_at)}　${esc(s.location || "")}</p></div>`
+            ).join("") : `<div class="muted">暂无时段</div>`}
+          </div>
+          <div class="panel">
+            <div class="section-title">候选人画像</div>
+            ${renderProfile(app.profile)}
+          </div>
+        </div>
+        <div class="panel">
+          <div class="section-title">面试题 ${questions.length ? `(${questions.length})` : "（确认后面试后生成）"}</div>
+          <div class="q-list">
+            ${questions.length ? questions.map((q) =>
+              `<div class="q-item"><div class="cat">${esc(q.category || "general")}</div><p>${esc(q.question || "")}</p></div>`
+            ).join("") : `<div class="empty">候选人确认面试时间后才会生成题目</div>`}
+          </div>
+        </div>`;
+      $("backApps").onclick = async () => {
+        stopDetailPoll();
+        await renderApps();
+        showView("apps");
+      };
+      const ab = $("approveBtn");
+      if (ab) ab.onclick = async () => {
+        if (!confirm("确认人工通过并发送面试邀约？")) return;
+        ab.disabled = true;
+        try {
+          await api("/v1/admin/applications/" + id + "/human/approve", { method: "POST", json: {} });
+          showToast("已人工通过并约面");
+          await renderDetail(id);
+        } catch (e) {
+          showToast(e.message || "操作失败", true);
+          ab.disabled = false;
+        }
+      };
+      const rb = $("retryBtn");
+      if (rb) rb.onclick = async () => {
+        rb.disabled = true;
+        rb.textContent = "解析中…";
+        try {
+          const text = ($("retryText") && $("retryText").value) || "";
+          await api("/v1/admin/applications/" + id + "/retry-parse", { method: "POST", json: { resume_text: text } });
+          showToast("已开始重试解析");
+          await renderDetail(id);
+        } catch (e) {
+          showToast(e.message || "重试失败", true);
+          rb.disabled = false;
+          rb.textContent = "重试解析";
+        }
+      };
+      const dl = $("dlResume");
+      if (dl) dl.onclick = async () => {
+        const headers = {};
+        if (token) headers["Authorization"] = "Bearer " + token;
+        const res = await fetch("/v1/admin/applications/" + id + "/resume", { headers, credentials: "include" });
+        if (!res.ok) { alert("下载失败"); return; }
+        const blob = await res.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = app.resume_name || "resume";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      };
+
+      if (processing) {
+        detailWatchId = id;
+        detailPollTimer = setInterval(async () => {
+          if (detailWatchId !== id || $("view-detail").classList.contains("hidden")) {
+            stopDetailPoll();
+            return;
+          }
+          try {
+            const latest = await api("/v1/admin/applications/" + id);
+            const badgeEl = $("detailStatusBadge");
+            const stepEl = $("detailStepper");
+            const logWrap = $("detailLogWrap");
+            if (badgeEl) badgeEl.innerHTML = badge(latest.status);
+            if (stepEl) stepEl.innerHTML = renderStepper(latest.status);
+            if (logWrap) logWrap.innerHTML = renderLiveLog(latest.audit || [], isProcessingStatus(latest.status));
+            const logBox = $("detailLiveLog");
+            if (logBox) logBox.scrollTop = logBox.scrollHeight;
+            if (!isProcessingStatus(latest.status)) {
+              stopDetailPoll();
+              await renderDetail(id);
+            }
+          } catch (_) { /* keep polling */ }
+        }, 1000);
+      }
+    }
+
+    function createPipelineSteps() {
+      return [
+        { key: "upload", label: "保存申请与简历" },
+        { key: "parse", label: "解析简历（文本 / OCR）" },
+        { key: "screen", label: "岗位匹配筛选" },
+        { key: "invite", label: "生成邀约邮件" },
+        { key: "done", label: "流程结束" },
+      ];
+    }
+    function stepStateFromApp(app) {
+      const st = (app && app.status) || "uploaded";
+      const err = (app && app.error_message) || "";
+      // index of current step; doneIdx = last completed
+      let idx = 0;
+      let mode = "current"; // current | fail | warn | done
+      switch (st) {
+        case "uploaded": idx = 0; break;
+        case "parsing": idx = 1; break;
+        case "screening": idx = 2; break;
+        case "screened": idx = 3; break;
+        case "awaiting_reply": idx = 4; mode = "done"; break;
+        case "rejected": idx = 4; mode = "fail"; break;
+        case "needs_human": idx = 4; mode = "warn"; break;
+        case "failed": idx = 1; mode = "fail"; break;
+        default: idx = 0;
+      }
+      const live = ({
+        uploaded: "正在写入申请记录…",
+        parsing: "正在抽取简历文本（必要时 OCR），请稍候…",
+        screening: "正在对照 JD 做匹配打分…",
+        screened: "筛选通过，正在准备面试邀约邮件…",
+        awaiting_reply: "已发送邀约，等待候选人回复",
+        rejected: "筛选未通过" + (err ? "：" + err : ""),
+        needs_human: "已转入人工处理" + (err ? "：" + err : ""),
+        failed: "流程失败" + (err ? "：" + err : ""),
+      })[st] || ("当前状态：" + (statusLabel[st] || st));
+      return { idx, mode, live, status: st };
+    }
+    function renderCreateProgress(app, running) {
+      const steps = createPipelineSteps();
+      const { idx, mode, live } = stepStateFromApp(app || { status: "uploaded" });
+      const html = steps.map((s, i) => {
+        let cls = "progress-step pending";
+        let mark = String(i + 1);
+        if (mode === "done" || i < idx) { cls = "progress-step done"; mark = "✓"; }
+        else if (i === idx) {
+          if (mode === "fail") { cls = "progress-step fail"; mark = "!"; }
+          else if (mode === "warn") { cls = "progress-step warn"; mark = "!"; }
+          else if (mode === "done") { cls = "progress-step done"; mark = "✓"; }
+          else { cls = "progress-step current"; mark = running ? "…" : String(i + 1); }
+        }
+        return `<div class="${cls}"><span class="dot">${mark}</span><span>${esc(s.label)}</span>
+          <span class="muted" style="font-size:.78rem">${i === idx && running && mode === "current" ? "进行中" : (i < idx || mode === "done" ? "完成" : "")}</span></div>`;
+      }).join("");
+      return `<div class="progress-box" id="cProgress">
+        <h4>${running ? `<span class="spinner"></span>` : ""}流程进度</h4>
+        <div class="progress-steps">${html}</div>
+        <div class="progress-live">${running ? "正在执行：" : "结果："}<strong>${esc(live)}</strong></div>
+      </div>`;
+    }
+    function isTerminalStatus(st) {
+      return ["awaiting_reply", "rejected", "needs_human", "failed", "confirmed", "declined"].includes(st);
+    }
+    async function pollCreateProgress(appID) {
+      const box = $("cProgressWrap");
+      if (!box) return;
+      let tries = 0;
+      while (tries < 180) {
+        tries++;
+        try {
+          const app = await api("/v1/admin/applications/" + appID);
+          box.innerHTML = renderCreateProgress(app, !isTerminalStatus(app.status));
+          $("cMsg").innerHTML = `<span class="muted">${esc(statusLabel[app.status] || app.status)} · ${esc(appID.slice(0, 8))}…</span>`;
+          if (isTerminalStatus(app.status)) {
+            const warn = app.error_message || "";
+            const ok = app.status === "awaiting_reply";
+            $("cMsg").innerHTML = `<span class="${ok ? "ok" : (app.status === "failed" || app.status === "rejected" ? "err" : "")}">已完成 · ${esc(statusLabel[app.status] || app.status)}</span>` +
+              (warn ? `<div class="alert warn" style="margin-top:.6rem">${esc(warn)}</div>` : "");
+            const btn = $("cSubmit");
+            if (btn) btn.disabled = false;
+            setTimeout(async () => { await renderDetail(appID); showView("detail"); }, 900);
+            return;
+          }
+        } catch (e) {
+          box.innerHTML = renderCreateProgress({ status: "failed", error_message: e.message }, false);
+          $("cMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+          const btn = $("cSubmit");
+          if (btn) btn.disabled = false;
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 800));
+      }
+      $("cMsg").innerHTML = `<span class="err">等待超时，请到申请列表查看</span>`;
+      const btn = $("cSubmit");
+      if (btn) btn.disabled = false;
+    }
+
+    function createIdleHint() {
+      return `<div class="hint-box">
+        <h4>流程说明</h4>
+        <p class="muted" style="margin:0;line-height:1.55">填写左侧信息并启动后，这里会实时显示执行步骤。</p>
+        <ol>
+          <li>保存申请与简历文件</li>
+          <li>解析简历文本（必要时 OCR）</li>
+          <li>对照 JD 做匹配筛选</li>
+          <li>通过后发送面试邀约邮件</li>
+          <li>候选人确认后生成确认函与面试题</li>
+        </ol>
+      </div>`;
+    }
+
+    async function renderCreate() {
+      const jds = await api("/v1/admin/jds");
+      const opts = (jds.items || []).map((j) =>
+        `<option value="${esc(j.id)}">${esc(j.title)}（${esc(j.id)}）</option>`
+      ).join("");
+      $("view-create").innerHTML = `
+        <div class="page-head">
+          <div><h2>上传简历</h2><p>支持粘贴文本或上传文件；右侧同步显示处理进度。</p></div>
+        </div>
+        <div class="create-layout">
+          <div class="panel">
+            <div class="create-fields">
+              <div class="full"><label>岗位 JD</label><select id="cJd">${opts || "<option value=''>请先创建 JD</option>"}</select></div>
+              <div><label>候选人姓名</label><input id="cName" placeholder="例如：张三" /></div>
+              <div><label>候选人邮箱</label><input id="cEmail" placeholder="用于发送面试邀请" /></div>
+              <div class="full"><label>简历文件（可选，pdf/docx/txt）</label><input id="cFile" type="file" accept=".pdf,.doc,.docx,.txt" /></div>
+              <div class="full"><label>或粘贴简历全文</label><textarea id="cResume" placeholder="从招聘渠道复制粘贴简历文本…"></textarea></div>
+            </div>
+            <div style="margin-top:1rem;display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
+              <button class="btn primary" id="cSubmit">创建并启动流程</button>
+              <span id="cMsg" class="muted"></span>
+            </div>
+          </div>
+          <aside class="create-side" id="cProgressWrap">${createIdleHint()}</aside>
+        </div>`;
+      $("cSubmit").onclick = async () => {
+        const btn = $("cSubmit");
+        btn.disabled = true;
+        $("cMsg").textContent = "正在提交…";
+        $("cProgressWrap").innerHTML = renderCreateProgress({ status: "uploaded" }, true);
+        try {
+          const file = $("cFile").files && $("cFile").files[0];
+          let out;
+          if (file) {
+            const fd = new FormData();
+            fd.append("jd_id", $("cJd").value);
+            fd.append("candidate_name", $("cName").value);
+            fd.append("candidate_email", $("cEmail").value);
+            fd.append("resume", file);
+            const headers = {};
+            if (token) headers["Authorization"] = "Bearer " + token;
+            const res = await fetch("/v1/admin/applications", { method: "POST", headers, body: fd, credentials: "include" });
+            out = await res.json().catch(() => ({}));
+            if (!res.ok && res.status !== 202) throw new Error(out.error || res.statusText);
+          } else {
+            out = await api("/v1/admin/applications", {
+              method: "POST",
+              json: {
+                jd_id: $("cJd").value,
+                candidate_name: $("cName").value,
+                candidate_email: $("cEmail").value,
+                resume_text: $("cResume").value,
+              },
+            });
+          }
+          if (!out.application_id) throw new Error("未返回申请 ID");
+          $("cMsg").textContent = "已受理，正在跟踪步骤…";
+          $("cProgressWrap").innerHTML = renderCreateProgress(out.application || { status: "uploaded" }, true);
+          await pollCreateProgress(out.application_id);
+        } catch (e) {
+          $("cMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+          $("cProgressWrap").innerHTML = renderCreateProgress({ status: "failed", error_message: e.message }, false);
+          btn.disabled = false;
+        }
+      };
+    }
+
+    function jdFormFields(j = {}) {
+      return `
+        <label>岗位名称 *</label><input id="jfTitle" value="${esc(j.title || "")}" placeholder="后端工程师" />
+        <label>部门</label><input id="jfDept" value="${esc(j.department || "")}" placeholder="技术部" />
+        <label>薪资</label><input id="jfSalary" value="${esc(j.salary || "")}" placeholder="例如：25-40K·15薪" />
+        <label>地点</label><input id="jfLoc" value="${esc(j.location || "")}" placeholder="例如：上海 / 远程" />
+        <label>岗位描述（职责、要求等）</label>
+        <textarea id="jfDesc" placeholder="岗位职责、任职要求、加分项…">${esc(j.description || "")}</textarea>
+      `;
+    }
+
+    function readJDForm(id) {
+      return {
+        id: id || "",
+        title: $("jfTitle").value.trim(),
+        department: $("jfDept").value.trim(),
+        salary: $("jfSalary").value.trim(),
+        location: $("jfLoc").value.trim(),
+        description: $("jfDesc").value.trim(),
+        requirements_text: $("jfDesc").value.trim(),
+      };
+    }
+
+    function closeModal() { $("modalRoot").innerHTML = ""; }
+
+    function openJDCreateModal() {
+      $("modalRoot").innerHTML = `
+        <div class="modal-backdrop" id="backdrop">
+          <div class="modal">
+            <h3>新建岗位</h3>
+            <p class="muted" style="margin:0 0 .8rem">填写完整后保存，可用于筛选与约面。</p>
+            ${jdFormFields()}
+            <div class="modal-actions">
+              <button class="btn" id="mCancel">取消</button>
+              <button class="btn primary" id="mSave">创建</button>
+            </div>
+            <div id="mMsg" style="margin-top:.5rem"></div>
+          </div>
+        </div>`;
+      $("mCancel").onclick = closeModal;
+      $("backdrop").onclick = (e) => { if (e.target.id === "backdrop") closeModal(); };
+      $("mSave").onclick = async () => {
+        try {
+          const out = await api("/v1/admin/jds", { method: "POST", json: readJDForm("") });
+          $("mMsg").innerHTML = `<span class="ok">已创建 ${esc(out.id)}</span>`;
+          closeModal();
+          await renderJDs();
+        } catch (e) {
+          $("mMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+        }
+      };
+    }
+
+    async function openJDDetail(id) {
+      const j = await api("/v1/admin/jds/" + id);
+      $("view-jds").innerHTML = `
+        <div class="page-head">
+          <div>
+            <h2>${esc(j.title || "岗位详情")}</h2>
+            <p class="muted">${esc(j.id)} · ${esc(j.department || "未设部门")}</p>
+          </div>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+            <button class="btn" id="jdBack">返回列表</button>
+            <button class="btn" id="jdDel" style="color:var(--danger)">删除</button>
+            <button class="btn primary" id="jdSave">保存修改</button>
+          </div>
+        </div>
+        <div class="panel" style="max-width:760px">
+          ${jdFormFields(j)}
+          <div id="jdMsg" style="margin-top:.75rem"></div>
+        </div>`;
+      $("jdBack").onclick = () => renderJDs();
+      $("jdSave").onclick = async () => {
+        const btn = $("jdSave");
+        const prev = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "保存中…";
+        try {
+          const payload = readJDForm(id);
+          await api("/v1/admin/jds/" + id, { method: "PUT", json: payload });
+          showToast("岗位已保存");
+          $("jdMsg").innerHTML = `<div class="alert" style="background:var(--ok-soft);color:var(--ok);border:1px solid rgba(11,110,79,.2)">保存成功：${esc(payload.title)} · ${esc(payload.salary || "未填薪资")} · ${esc(payload.location || "未填地点")}</div>`;
+          btn.textContent = "已保存 ✓";
+          // refresh header title with saved values
+          document.querySelector("#view-jds .page-head h2").textContent = payload.title || "岗位详情";
+          document.querySelector("#view-jds .page-head p").textContent =
+            `${id} · ${payload.department || "未设部门"}`;
+          setTimeout(() => { btn.textContent = prev; btn.disabled = false; }, 1200);
+        } catch (e) {
+          showToast("保存失败：" + e.message, true);
+          $("jdMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+          btn.textContent = prev;
+          btn.disabled = false;
+        }
+      };
+      $("jdDel").onclick = async () => {
+        if (!confirm("确认删除该岗位？若已有关联申请则无法删除。")) return;
+        try {
+          await api("/v1/admin/jds/" + id, { method: "DELETE" });
+          await renderJDs();
+        } catch (e) {
+          $("jdMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+        }
+      };
+    }
+
+    async function renderJDs() {
+      const data = await api("/v1/admin/jds");
+      const rows = (data.items || []).map((j) =>
+        `<tr>
+          <td><button class="linkish" data-id="${esc(j.id)}">${esc(j.title)}</button>
+            <div class="muted" style="font-size:.78rem">${esc(j.id)}</div></td>
+          <td>${esc(j.department || "-")}</td>
+          <td>${esc(j.salary || "-")}</td>
+          <td>${esc(j.location || "-")}</td>
+          <td class="muted">${fmtTime(j.created_at)}</td>
+        </tr>`
+      ).join("");
+      $("view-jds").innerHTML = `
+        <div class="page-head">
+          <div><h2>岗位 JD</h2><p>点击岗位查看详情并可修改；新建使用弹窗。</p></div>
+          <button class="btn primary" id="jdNew">新建岗位</button>
+        </div>
+        <div class="panel">
+          <table>
+            <thead><tr><th>岗位名称</th><th>部门</th><th>薪资</th><th>地点</th><th>创建</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="5"><div class="empty">还没有 JD，点击右上角新建</div></td></tr>`}</tbody>
+          </table>
+        </div>`;
+      $("jdNew").onclick = openJDCreateModal;
+      $("view-jds").onclick = async (e) => {
+        const b = e.target.closest("button[data-id]");
+        if (!b) return;
+        await openJDDetail(b.getAttribute("data-id"));
+      };
+    }
+
+    async function renderBank() {
+      const data = await api("/v1/admin/question-bank");
+      const rows = (data.items || []).map((q) =>
+        `<tr>
+          <td><button class="linkish" data-edit="${esc(q.id)}">${esc(q.title || q.id)}</button>
+            <div class="muted" style="font-size:.78rem">${esc(q.id)}</div></td>
+          <td>${esc(q.category || "-")}</td>
+          <td>${esc(q.difficulty || "-")}</td>
+          <td>${q.enabled ? "启用" : "停用"}</td>
+          <td class="muted">${esc((q.tags || []).join(", ") || "-")}</td>
+          <td style="display:flex;gap:.35rem;flex-wrap:wrap">
+            <button class="btn" data-edit="${esc(q.id)}">编辑</button>
+            <button class="btn" data-del="${esc(q.id)}">删除</button>
+          </td>
+        </tr>`
+      ).join("");
+      $("view-bank").innerHTML = `
+        <div class="page-head">
+          <div>
+            <h2>题库 RAG</h2>
+            <p>MySQL 存权威题库；保存后分块写入向量库。面试生成题仍落在申请的 questions_json。</p>
+          </div>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+            <button class="btn" id="bankReindex">全量同步向量库</button>
+            <button class="btn primary" id="bankNew">新建题目</button>
+          </div>
+        </div>
+        <div class="panel">
+          <table>
+            <thead><tr><th>标题</th><th>分类</th><th>难度</th><th>状态</th><th>标签</th><th>操作</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="6"><div class="empty">题库为空，可新建或点「全量同步」写入种子题</div></td></tr>`}</tbody>
+          </table>
+        </div>`;
+      $("bankNew").onclick = () => openBankModal(null);
+      $("bankReindex").onclick = async () => {
+        $("bankReindex").disabled = true;
+        try {
+          const res = await api("/v1/admin/question-bank/reindex", { method: "POST", json: {} });
+          showToast(res.ok === false ? ("同步有失败: " + (res.error || "")) : `已同步 ${res.synced_items || res.upserted || 0} 条`);
+          await renderBank();
+        } catch (e) {
+          showToast(e.message || "同步失败", true);
+        } finally {
+          $("bankReindex").disabled = false;
+        }
+      };
+      $("view-bank").onclick = async (e) => {
+        const del = e.target.closest("[data-del]");
+        if (del) {
+          if (!confirm("确认删除该题库条目？")) return;
+          try {
+            await api("/v1/admin/question-bank/" + del.getAttribute("data-del"), { method: "DELETE" });
+            showToast("已删除");
+            await renderBank();
+          } catch (err) {
+            showToast(err.message || "删除失败", true);
+          }
+          return;
+        }
+        const ed = e.target.closest("[data-edit]");
+        if (ed) {
+          const item = await api("/v1/admin/question-bank/" + ed.getAttribute("data-edit"));
+          openBankModal(item);
+        }
+      };
+    }
+
+
+    const staffActionLabel = {
+      staff_created: "新增成员",
+      staff_updated: "更新成员",
+      staff_enabled: "启用成员",
+      staff_disabled: "停用成员",
+      staff_calendar_acl_failed: "日历 ACL 同步失败",
+      staff_join_requested: "提交加入申请",
+      staff_join_approved: "同意加入申请",
+      staff_join_rejected: "拒绝加入申请",
+    };
+
+    async function renderStaff() {
+      const [data, joins, audit] = await Promise.all([
+        api("/v1/admin/staff"),
+        api("/v1/admin/staff/join-requests?status=pending").catch(() => ({ items: [], pending_count: 0 })),
+        api("/v1/admin/staff/audit").catch(() => ({ items: [] })),
+      ]);
+      const joinRows = (joins.items || []).map((j) =>
+        `<tr>
+          <td><strong>${esc(j.name || "-")}</strong>
+            <div class="muted" style="font-size:.78rem">${esc(j.open_id)}</div></td>
+          <td>${esc(j.email || "-")}</td>
+          <td class="muted">${esc(fmtTime(j.created_at))}</td>
+          <td style="display:flex;gap:.35rem;flex-wrap:wrap">
+            <button class="btn primary" data-approve="${esc(j.id)}">同意加入</button>
+            <button class="btn" data-reject="${esc(j.id)}">拒绝</button>
+          </td>
+        </tr>`
+      ).join("");
+      const rows = (data.items || []).map((m) => {
+        const roles = [
+          m.is_admin ? "管理员" : "",
+          m.is_hr ? "HR" : "",
+          m.is_interviewer ? "面试官" : "",
+        ].filter(Boolean).join(" / ") || "-";
+        const canDisable = m.enabled && !m.is_admin;
+        return `<tr>
+          <td><strong>${esc(m.name || "-")}</strong>
+            <div class="muted" style="font-size:.78rem">${esc(m.open_id)}</div></td>
+          <td>${esc(m.email || "-")}</td>
+          <td>${esc(roles)}</td>
+          <td>${m.enabled ? "启用" : "停用"}</td>
+          <td style="display:flex;gap:.35rem;flex-wrap:wrap">
+            <button class="btn" data-edit="${esc(m.open_id)}">编辑</button>
+            ${canDisable
+              ? `<button class="btn" data-disable="${esc(m.open_id)}">停用</button>`
+              : (!m.enabled ? `<button class="btn" data-enable="${esc(m.open_id)}">启用</button>` : "")}
+          </td>
+        </tr>`;
+      }).join("");
+      const auditRows = (audit.items || []).slice(0, 12).map((a) => {
+        const label = staffActionLabel[a.action] || a.action;
+        const d = a.detail || {};
+        const who = d.name || d.open_id || "";
+        return `<div class="log-line"><div class="log-time">${esc(fmtTime(a.created_at))}</div>
+          <div><strong>${esc(label)}</strong> ${esc(who)} <span class="muted">by ${esc(a.actor || "")}</span></div></div>`;
+      }).join("");
+      const pendingN = joins.pending_count || (joins.items || []).length || 0;
+      $("view-staff").innerHTML = `
+        <div class="page-head">
+          <div>
+            <h2>成员管理</h2>
+            <p>加入申请者均为 HR：审批后开通系统权限，并尽力同步共享日历。面试官只用于排期查忙闲，其飞书日历权限请你在飞书里单独配置，不在此管理。</p>
+          </div>
+          <button class="btn" id="staffNew">手动添加（备用）</button>
+        </div>
+        <div class="panel">
+          <div class="section-title">待审批加入申请 ${pendingN ? `(${pendingN})` : ""}</div>
+          <table>
+            <thead><tr><th>申请人</th><th>邮箱</th><th>申请时间</th><th>操作</th></tr></thead>
+            <tbody>${joinRows || `<tr><td colspan="4"><div class="empty">暂无待审批申请</div></td></tr>`}</tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <div class="section-title">已有成员</div>
+          <table>
+            <thead><tr><th>成员</th><th>邮箱</th><th>角色</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="5"><div class="empty">暂无成员</div></td></tr>`}</tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <div class="section-title">成员操作审计</div>
+          <div class="live-log">${auditRows || `<div class="muted">暂无审计</div>`}</div>
+        </div>`;
+      $("staffNew").onclick = () => openStaffModal(null);
+      $("view-staff").onclick = async (e) => {
+        const ap = e.target.closest("[data-approve]");
+        if (ap) {
+          openApproveJoinModal(ap.getAttribute("data-approve"));
+          return;
+        }
+        const rj = e.target.closest("[data-reject]");
+        if (rj) {
+          if (!confirm("确认拒绝该加入申请？")) return;
+          try {
+            await api("/v1/admin/staff/join-requests/" + encodeURIComponent(rj.getAttribute("data-reject")) + "/reject", {
+              method: "POST", json: { note: "rejected" },
+            });
+            showToast("已拒绝");
+            await renderStaff();
+          } catch (err) { showToast(err.message || "失败", true); }
+          return;
+        }
+        const ed = e.target.closest("[data-edit]");
+        if (ed) {
+          const id = ed.getAttribute("data-edit");
+          const item = (data.items || []).find((x) => x.open_id === id);
+          openStaffModal(item || { open_id: id });
+          return;
+        }
+        const dis = e.target.closest("[data-disable]");
+        if (dis) {
+          if (!confirm("确认停用该成员？")) return;
+          try {
+            await api("/v1/admin/staff/" + encodeURIComponent(dis.getAttribute("data-disable")) + "/disable", { method: "POST", json: {} });
+            showToast("已停用");
+            await renderStaff();
+          } catch (err) { showToast(err.message || "失败", true); }
+          return;
+        }
+        const en = e.target.closest("[data-enable]");
+        if (en) {
+          try {
+            await api("/v1/admin/staff/" + encodeURIComponent(en.getAttribute("data-enable")) + "/enable", { method: "POST", json: {} });
+            showToast("已启用");
+            await renderStaff();
+          } catch (err) { showToast(err.message || "失败", true); }
+        }
+      };
+    }
+
+    function openApproveJoinModal(requestId) {
+      const root = $("modalRoot");
+      root.innerHTML = `
+        <div class="modal-backdrop">
+          <div class="modal">
+            <h3>同意加入</h3>
+            <p class="muted">申请者将开通 HR 系统权限。若其也参与面试，可同时加入面试官池（仅用于查忙闲排期）。</p>
+            <label class="check"><input type="checkbox" id="aHR" checked disabled /> HR（可登录系统，必选）</label>
+            <label class="check"><input type="checkbox" id="aInt" /> 同时加入面试官池（排期用）</label>
+            <div class="modal-actions">
+              <button class="btn" id="aCancel">取消</button>
+              <button class="btn primary" id="aOk">确认同意</button>
+            </div>
+          </div>
+        </div>`;
+      $("aCancel").onclick = () => { root.innerHTML = ""; };
+      $("aOk").onclick = async () => {
+        const payload = { is_hr: true, is_interviewer: $("aInt").checked };
+        $("aOk").disabled = true;
+        try {
+          await api("/v1/admin/staff/join-requests/" + encodeURIComponent(requestId) + "/approve", {
+            method: "POST", json: payload,
+          });
+          showToast("已同意加入");
+          root.innerHTML = "";
+          await renderStaff();
+        } catch (e) {
+          showToast(e.message || "失败", true);
+          $("aOk").disabled = false;
+        }
+      };
+    }
+
+    function openStaffModal(item) {
+      const isNew = !item || !item.open_id;
+      const root = $("modalRoot");
+      root.innerHTML = `
+        <div class="modal-backdrop">
+          <div class="modal">
+            <h3>${isNew ? "添加成员" : "编辑成员"}</h3>
+            <label>飞书 open_id</label>
+            <input id="sOpenId" value="${esc(item && item.open_id || "")}" ${isNew ? "" : "readonly"} placeholder="ou_xxxx" />
+            <label>姓名</label>
+            <input id="sName" value="${esc(item && item.name || "")}" placeholder="显示名" />
+            <label>邮箱</label>
+            <input id="sEmail" value="${esc(item && item.email || "")}" placeholder="可选" />
+            ${(item && item.is_admin) ? `<div class="alert warn" style="margin-top:.75rem">系统管理员：固定为 HR + 面试官，且不可停用。</div>` : ""}
+            <label class="check">
+              <input type="checkbox" id="sHR" ${(item ? !!item.is_hr : true) ? "checked" : ""} ${(item && item.is_admin) ? "disabled" : ""} /> HR（可登录系统）
+            </label>
+            <label class="check">
+              <input type="checkbox" id="sInt" ${(item ? !!item.is_interviewer : false) ? "checked" : ""} ${(item && item.is_admin) ? "disabled" : ""} /> 面试官（仅排期查忙闲，不改飞书日历权限）
+            </label>
+            <label class="check">
+              <input type="checkbox" id="sEn" ${(item ? item.enabled !== false : true) ? "checked" : ""} ${(item && item.is_admin) ? "disabled" : ""} /> 启用
+            </label>
+            <div class="modal-actions">
+              <button class="btn" id="sCancel">取消</button>
+              <button class="btn primary" id="sSave">保存</button>
+            </div>
+          </div>
+        </div>`;
+      $("sCancel").onclick = () => { root.innerHTML = ""; };
+      $("sSave").onclick = async () => {
+        const payload = {
+          open_id: $("sOpenId").value.trim(),
+          name: $("sName").value.trim(),
+          email: $("sEmail").value.trim(),
+          is_hr: $("sHR").checked,
+          is_interviewer: $("sInt").checked,
+          enabled: $("sEn").checked,
+        };
+        if (!payload.open_id) { showToast("open_id 必填", true); return; }
+        if (!payload.is_hr && !payload.is_interviewer) { showToast("至少选择一个角色", true); return; }
+        $("sSave").disabled = true;
+        try {
+          if (isNew) await api("/v1/admin/staff", { method: "POST", json: payload });
+          else await api("/v1/admin/staff/" + encodeURIComponent(payload.open_id), { method: "PUT", json: payload });
+          showToast("已保存");
+          root.innerHTML = "";
+          await renderStaff();
+        } catch (e) {
+          showToast(e.message || "保存失败", true);
+          $("sSave").disabled = false;
+        }
+      };
+    }
+
+    function openBankModal(item) {
+      const isNew = !item;
+      const root = $("modalRoot");
+      root.innerHTML = `
+        <div class="modal-backdrop">
+          <div class="modal">
+            <h3>${isNew ? "新建题库条目" : "编辑题库条目"}</h3>
+            <label>标题</label>
+            <input id="bTitle" value="${esc(item && item.title || "")}" placeholder="简短标题" />
+            <label>分类</label>
+            <select id="bCat">
+              ${["algorithm","system_design","fundamentals","behavioral","other"].map((c) =>
+                `<option value="${c}" ${(item && item.category) === c ? "selected" : ""}>${c}</option>`).join("")}
+            </select>
+            <label>难度</label>
+            <select id="bDiff">
+              ${["easy","medium","hard"].map((d) =>
+                `<option value="${d}" ${(item && item.difficulty || "medium") === d ? "selected" : ""}>${d}</option>`).join("")}
+            </select>
+            <label>标签（逗号分隔）</label>
+            <input id="bTags" value="${esc(((item && item.tags) || []).join(", "))}" placeholder="go, mysql, 分布式" />
+            <label>正文（长文会自动分块入库）</label>
+            <textarea id="bContent" style="min-height:160px" placeholder="题目 / 知识点 / 参考要点…">${esc(item && item.content || "")}</textarea>
+            <label class="check">
+              <input type="checkbox" id="bEnabled" ${(item ? item.enabled !== false : true) ? "checked" : ""} /> 启用（写入向量库）
+            </label>
+            <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem">
+              <button class="btn" id="bCancel">取消</button>
+              <button class="btn primary" id="bSave">保存并入库</button>
+            </div>
+          </div>
+        </div>`;
+      $("bCancel").onclick = () => { root.innerHTML = ""; };
+      $("bSave").onclick = async () => {
+        const payload = {
+          id: item && item.id || "",
+          title: $("bTitle").value.trim(),
+          category: $("bCat").value,
+          difficulty: $("bDiff").value,
+          tags: $("bTags").value.split(/[,，]/).map((t) => t.trim()).filter(Boolean),
+          content: $("bContent").value.trim(),
+          enabled: $("bEnabled").checked,
+        };
+        if (!payload.content) { showToast("正文不能为空", true); return; }
+        $("bSave").disabled = true;
+        try {
+          if (isNew) await api("/v1/admin/question-bank", { method: "POST", json: payload });
+          else await api("/v1/admin/question-bank/" + item.id, { method: "PUT", json: payload });
+          showToast("已保存并同步向量库");
+          root.innerHTML = "";
+          await renderBank();
+        } catch (e) {
+          showToast(e.message || "保存失败", true);
+          $("bSave").disabled = false;
+        }
+      };
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return "-";
+      try {
+        return new Date(iso).toLocaleString("zh-CN", { hour12: false });
+      } catch { return String(iso); }
+    }
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+    function showToast(text, isErr) {
+      const el = document.createElement("div");
+      el.className = "toast" + (isErr ? " err" : "");
+      el.textContent = text;
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 2200);
+    }
+    boot();
+  </script>
+</body>
+</html>

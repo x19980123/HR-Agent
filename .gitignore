@@ -1,0 +1,12 @@
+.env
+uploads/
+services/bin/
+python/wheels/
+python/data/
+python/.venv/
+**/__pycache__/
+*.exe
+*.log
+.idea/
+.vscode/
+services/_envtest/

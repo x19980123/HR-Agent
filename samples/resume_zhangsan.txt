@@ -1,0 +1,16 @@
+张三
+邮箱: zhangsan@example.com
+手机: 13812345678
+工作年限: 4年
+
+教育经历
+某某大学 计算机科学与技术 本科 2018
+
+工作经历
+ABC科技 后端工程师 2020-2024
+- 使用 Go/Python 开发微服务
+- MySQL/Redis/Kafka 高并发订单系统
+- 负责面试题库与招聘协作工具
+
+技能: Go, Python, MySQL, Redis, Docker, Kubernetes, 微服务
+论文: 无

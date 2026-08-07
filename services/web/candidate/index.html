@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>面试回复 · HR Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,560;9..144,700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #12231f; --muted: #5a6f68; --line: rgba(18,35,31,.12);
+      --accent: #0f766e; --accent-deep: #0b5c56; --danger: #b42318; --warn: #9a6700; --ok: #0b6e4f;
+      --font: "DM Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --display: "Fraunces", "Songti SC", Georgia, serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; font-family: var(--font); color: var(--ink);
+      background:
+        radial-gradient(800px 360px at 0% -10%, #c8ebe4 0%, transparent 55%),
+        radial-gradient(640px 320px at 100% 0%, #e2eaf5 0%, transparent 50%),
+        #f3f6f5;
+    }
+    main { max-width: 540px; margin: 0 auto; padding: 2.4rem 1.2rem 3rem; }
+    .brand { font-weight: 700; color: var(--accent-deep); letter-spacing: .04em; font-size: .85rem; margin-bottom: .8rem; }
+    h1 {
+      font-family: var(--display); font-size: clamp(1.8rem, 4vw, 2.2rem);
+      margin: 0 0 .4rem; letter-spacing: -.02em;
+    }
+    .sub { color: var(--muted); margin: 0 0 1.4rem; line-height: 1.5; }
+    .panel {
+      background: rgba(255,255,255,.82); border: 1px solid rgba(255,255,255,.75);
+      border-radius: 22px; padding: 1.3rem 1.35rem;
+      box-shadow: 0 18px 40px rgba(18,35,31,.08);
+      animation: rise .45s ease both;
+    }
+    .row { margin: .7rem 0; }
+    .label { color: var(--muted); font-size: .82rem; font-weight: 600; }
+    .value { font-weight: 650; margin-top: .18rem; font-size: 1.02rem; }
+    .actions { display: grid; gap: .7rem; margin-top: 1.25rem; }
+    button {
+      appearance: none; border: 0; border-radius: 14px; padding: .9rem 1rem;
+      font: inherit; font-weight: 700; cursor: pointer;
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    button:hover { transform: translateY(-1px); }
+    button:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+    button.primary { background: linear-gradient(180deg,#149388,#0f766e); color: #fff; box-shadow: 0 10px 22px rgba(15,118,110,.25); }
+    button.secondary { background: #eef3f1; color: var(--ink); }
+    button.danger { background: #fdeceb; color: var(--danger); }
+    .slot {
+      display: block; width: 100%; text-align: left; border: 1px solid var(--line);
+      background: #fafcfb; margin: .5rem 0; border-radius: 14px; padding: .9rem 1rem;
+      cursor: pointer; font-weight: 600;
+    }
+    .slot:hover { border-color: var(--accent); }
+    .msg { margin-top: 1rem; padding: .9rem 1rem; border-radius: 14px; background: #e8f6f2; line-height: 1.55; }
+    .msg.err { background: #fdeceb; color: var(--danger); }
+    .msg.warn { background: #fff7e6; color: var(--warn); }
+    .msg.ok { background: #e5f6ef; color: var(--ok); }
+    .wait-card {
+      margin-top: .9rem; padding: 1.15rem 1.1rem; border-radius: 16px;
+      background: linear-gradient(180deg, #f3faf8, #e8f6f2);
+      border: 1px solid rgba(15,118,110,.2);
+    }
+    .wait-card .title { font-weight: 800; font-size: 1.05rem; color: var(--accent-deep); margin: 0 0 .45rem; }
+    .wait-card p { margin: .35rem 0; color: var(--ink); line-height: 1.55; }
+    .wait-card .hint { color: var(--muted); font-size: .9rem; }
+    .hidden { display: none; }
+    @keyframes rise { from { opacity:0; transform: translateY(8px);} to { opacity:1; transform:none;} }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">HR AGENT</div>
+    <h1>面试安排确认</h1>
+    <p class="sub" id="subtitle">加载中…</p>
+    <section class="panel">
+      <div id="info"></div>
+      <div class="actions" id="actions"></div>
+      <div id="slots" class="hidden"></div>
+      <div id="result"></div>
+    </section>
+  </main>
+  <script>
+    const token = location.pathname.split("/").filter(Boolean).pop();
+    let state = null;
+
+    async function load() {
+      const res = await fetch("/v1/public/reply/" + encodeURIComponent(token));
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        document.getElementById("subtitle").textContent = "链接无效或已过期";
+        document.getElementById("result").innerHTML =
+          `<div class="msg err">${esc(data.error || "无法打开回复页")}</div>`;
+        return;
+      }
+      render(data);
+    }
+
+    function confirmedSlot(slots) {
+      const list = slots || [];
+      return list.find((s) => s.status === "confirmed") || list[0] || null;
+    }
+
+    function renderDoneState(data) {
+      const st = data.status;
+      document.getElementById("subtitle").textContent = "本链接已完成操作，无需再次提交。";
+      document.getElementById("actions").innerHTML = "";
+      document.getElementById("slots").classList.add("hidden");
+      document.getElementById("slots").innerHTML = "";
+
+      if (st === "confirmed") {
+        const sl = confirmedSlot(data.slots);
+        document.getElementById("info").innerHTML = `
+          <div class="row"><div class="label">候选人</div><div class="value">${esc(data.candidate_name || "-")}</div></div>
+          <div class="row"><div class="label">岗位</div><div class="value">${esc(data.jd_title || "-")}</div></div>
+          <div class="row"><div class="label">当前状态</div><div class="value">已确认时段</div></div>
+          ${sl ? `<div class="row"><div class="label">已选时段</div><div class="value">${fmt(sl.starts_at)} - ${fmtTime(sl.ends_at)}（${esc(sl.location || "")}）</div></div>` : ""}
+        `;
+        document.getElementById("result").innerHTML = `
+          <div class="wait-card">
+            <div class="title">已提交，请等待通知</div>
+            <p>您的面试时段已记录成功。</p>
+            <p class="hint">请留意邮箱通知：会议链接或线下地址将另行发送。本页无需再操作，可直接关闭。</p>
+          </div>`;
+        return;
+      }
+
+      document.getElementById("info").innerHTML = `
+        <div class="row"><div class="label">候选人</div><div class="value">${esc(data.candidate_name || "-")}</div></div>
+        <div class="row"><div class="label">岗位</div><div class="value">${esc(data.jd_title || "-")}</div></div>
+        <div class="row"><div class="label">当前状态</div><div class="value">${esc(statusLabel(st))}</div></div>
+      `;
+      const tone = st === "needs_human" ? "warn" : (st === "declined" ? "ok" : "warn");
+      document.getElementById("result").innerHTML =
+        `<div class="msg ${tone}">${esc(data.message || "当前不可操作")}</div>`;
+    }
+
+    function render(data) {
+      state = data;
+      if (!data.can_act) {
+        renderDoneState(data);
+        return;
+      }
+      document.getElementById("subtitle").textContent =
+        `请在 ${data.reply_hours || 48} 小时内完成回复（有效至 ${new Date(data.expires_at).toLocaleString()}）`;
+      document.getElementById("info").innerHTML = `
+        <div class="row"><div class="label">候选人</div><div class="value">${esc(data.candidate_name || "-")}</div></div>
+        <div class="row"><div class="label">岗位</div><div class="value">${esc(data.jd_title || "-")}</div></div>
+        <div class="row"><div class="label">当前状态</div><div class="value">${esc(statusLabel(data.status))}</div></div>
+        ${renderSlotsPreview(data.slots || [], data.reschedule_mode)}
+      `;
+      document.getElementById("result").innerHTML = "";
+      document.getElementById("slots").classList.add("hidden");
+      document.getElementById("slots").innerHTML = "";
+      document.getElementById("actions").innerHTML = "";
+      if (data.reschedule_mode) showSlots(data);
+      else showActions(data);
+    }
+
+    function statusLabel(st) {
+      return ({
+        awaiting_reply: "待回复", confirmed: "已确认", declined: "已拒绝",
+        needs_human: "已转人工",
+      })[st] || st;
+    }
+
+    function renderSlotsPreview(slots, rescheduleMode) {
+      if (!slots.length) return "";
+      const title = rescheduleMode ? "可选时段" : "提议时段";
+      return slots.map((s, i) =>
+        `<div class="row"><div class="label">${title} ${i + 1}</div><div class="value">${fmt(s.starts_at)} - ${fmtTime(s.ends_at)}（${esc(s.location || "")}）</div></div>`
+      ).join("");
+    }
+
+    function showActions(data) {
+      document.getElementById("actions").innerHTML = `
+        <button class="primary" data-a="accept">接受当前时段</button>
+        <button class="secondary" data-a="reschedule">改选其他时段</button>
+        <button class="danger" data-a="decline">拒绝</button>`;
+      document.getElementById("actions").onclick = async (e) => {
+        const btn = e.target.closest("button[data-a]");
+        if (!btn) return;
+        await act(btn.getAttribute("data-a"));
+      };
+    }
+
+    function showSlots(data) {
+      document.getElementById("actions").innerHTML = "";
+      const box = document.getElementById("slots");
+      box.classList.remove("hidden");
+      const slots = data.slots || [];
+      if (!slots.length) {
+        box.innerHTML = `<div class="msg warn">暂无可选时段。</div>
+          <button class="secondary" id="noneBtn" style="width:100%;margin-top:.7rem">以上都不合适，转人工联系</button>`;
+        document.getElementById("noneBtn").onclick = () => act("none_suitable");
+        return;
+      }
+      box.innerHTML = `<p class="sub" style="margin:0 0 .5rem">请选择一个面试时段（在本页完成，无需等待新邮件）：</p>` +
+        slots.map((s) =>
+          `<button class="slot" data-i="${s.index}">${fmt(s.starts_at)} - ${fmtTime(s.ends_at)}　${esc(s.location || "")}</button>`
+        ).join("") +
+        `<button class="secondary" id="refreshBtn" style="width:100%;margin-top:.55rem" ${data.can_refresh_slots ? "" : "disabled"}>
+          ${data.can_refresh_slots ? "换一批时段" : "已达改期次数上限"}
+        </button>
+        <button class="danger" id="noneBtn" style="width:100%;margin-top:.55rem">以上都不合适，请 HR 联系我</button>`;
+      box.onclick = async (e) => {
+        const slotBtn = e.target.closest("button[data-i]");
+        if (slotBtn) {
+          await act("pick_slot", Number(slotBtn.getAttribute("data-i")));
+          return;
+        }
+        if (e.target.id === "refreshBtn" || e.target.closest("#refreshBtn")) {
+          await act("reschedule");
+          return;
+        }
+        if (e.target.id === "noneBtn" || e.target.closest("#noneBtn")) {
+          await act("none_suitable");
+        }
+      };
+    }
+
+    async function act(action, slotIndex) {
+      setBusy(true);
+      const body = { action };
+      if (typeof slotIndex === "number") body.slot_index = slotIndex;
+      const res = await fetch("/v1/public/reply/" + encodeURIComponent(token), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      setBusy(false);
+      if (!res.ok) {
+        document.getElementById("result").innerHTML =
+          `<div class="msg err">${esc(data.error || "提交失败")}</div>`;
+        return;
+      }
+      if (action === "reschedule" && data.view) {
+        render(data.view);
+        document.getElementById("result").innerHTML =
+          `<div class="msg">已更新可选时段，请直接在下方选择（不会另发邮件）。</div>`;
+        return;
+      }
+      if (data.view) {
+        render(data.view);
+        return;
+      }
+      // fallback
+      if (action === "accept" || action === "pick_slot") {
+        document.getElementById("result").innerHTML = `
+          <div class="wait-card">
+            <div class="title">已提交，请等待通知</div>
+            <p>您的面试时段已记录成功。</p>
+            <p class="hint">请留意邮箱通知，会议链接或线下地址将另行发送。</p>
+          </div>`;
+      }
+    }
+
+    function setBusy(b) { document.querySelectorAll("button").forEach((el) => { el.disabled = b; }); }
+    function fmt(iso) { try { return new Date(iso).toLocaleString(); } catch { return iso; } }
+    function fmtTime(iso) {
+      try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+      catch { return iso; }
+    }
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+      }[c]));
+    }
+    load().catch((e) => {
+      document.getElementById("result").innerHTML = `<div class="msg err">${esc(e.message || e)}</div>`;
+    });
+  </script>
+</body>
+</html>
