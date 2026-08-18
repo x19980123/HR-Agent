@@ -39,8 +39,6 @@ type Config struct {
 	FeishuAppID             string
 	FeishuAppSecret         string
 	FeishuCalendarID        string
-	FeishuInterviewerUserID string
-	FeishuInterviewerName   string
 	FeishuUserIDType        string
 	FeishuTimezone          string
 	FeishuLocation          string
@@ -50,6 +48,19 @@ type Config struct {
 	FeishuOAuthRedirect  string
 	FeishuHRAllowOpenIDs []string
 	FeishuHRAllowEmails  []string
+
+	AlertWebhookURL    string
+	ImportConcurrency  int
+
+	ContactRequireResolved           bool
+	ContactAllowPlaceholderInDryRun  bool
+	ContactPlaceholderDomains        []string
+	ContactBlocklistDomains          []string
+	ImportPreExtract                 bool
+	ImportDedup                      string // skip | error | new_version
+
+	// Scheduling Agent (Python assign + verify); false = Phase 2 classified resolve only.
+	SchedulingAgentEnabled bool
 }
 
 func Load() (*Config, error) {
@@ -88,8 +99,6 @@ func Load() (*Config, error) {
 		FeishuAppID:             getenv("FEISHU_APP_ID", ""),
 		FeishuAppSecret:         getenv("FEISHU_APP_SECRET", ""),
 		FeishuCalendarID:        getenv("FEISHU_CALENDAR_ID", ""),
-		FeishuInterviewerUserID: getenv("FEISHU_INTERVIEWER_USER_ID", ""),
-		FeishuInterviewerName:   getenv("FEISHU_INTERVIEWER_NAME", ""),
 		FeishuUserIDType:        getenv("FEISHU_USER_ID_TYPE", "open_id"),
 		FeishuTimezone:          getenv("FEISHU_TIMEZONE", "Asia/Shanghai"),
 		FeishuLocation:          getenv("FEISHU_LOCATION", "飞书会议 / 线上面试"),
@@ -98,6 +107,17 @@ func Load() (*Config, error) {
 		FeishuOAuthRedirect: getenv("FEISHU_OAUTH_REDIRECT_URI", ""),
 		FeishuHRAllowOpenIDs: splitCSV(getenv("FEISHU_HR_ALLOW_OPEN_IDS", "")),
 		FeishuHRAllowEmails:  splitCSV(getenv("FEISHU_HR_ALLOW_EMAILS", "")),
+		AlertWebhookURL:      getenv("ALERT_WEBHOOK_URL", ""),
+		ImportConcurrency:    getenvInt("IMPORT_CONCURRENCY", 2),
+
+		ContactRequireResolved:          getenvBool("CONTACT_REQUIRE_RESOLVED", true),
+		ContactAllowPlaceholderInDryRun: getenvBool("CONTACT_ALLOW_PLACEHOLDER_IN_DRY_RUN", false),
+		ContactPlaceholderDomains:       splitCSV(getenv("CONTACT_PLACEHOLDER_DOMAINS", "import.local")),
+		ContactBlocklistDomains:         splitCSV(getenv("CONTACT_BLOCKLIST_DOMAINS", "example.com,test.com,localhost")),
+		ImportPreExtract:                getenvBool("IMPORT_PRE_EXTRACT", true),
+		ImportDedup:                     strings.ToLower(getenv("IMPORT_DEDUP", "skip")),
+
+		SchedulingAgentEnabled: getenvBool("SCHEDULING_AGENT_ENABLED", true),
 	}
 	if cfg.SessionSecret == "" {
 		cfg.SessionSecret = cfg.ReplyTokenSecret

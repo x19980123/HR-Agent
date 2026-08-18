@@ -148,10 +148,23 @@
         `请在 ${data.reply_hours || 48} 小时内完成回复（有效至 ${new Date(data.expires_at).toLocaleString()}）`;
       document.getElementById("info").innerHTML = `
         <div class="row"><div class="label">候选人</div><div class="value">${esc(data.candidate_name || "-")}</div></div>
+        <div class="row"><div class="label">联系邮箱</div><div class="value">${esc(data.candidate_email || "-")}</div></div>
         <div class="row"><div class="label">岗位</div><div class="value">${esc(data.jd_title || "-")}</div></div>
         <div class="row"><div class="label">当前状态</div><div class="value">${esc(statusLabel(data.status))}</div></div>
         ${renderSlotsPreview(data.slots || [], data.reschedule_mode)}
       `;
+      if (data.can_update_email) {
+        document.getElementById("info").innerHTML += `
+          <div class="row" style="margin-top:.85rem">
+            <div class="label">更正邮箱（可选）</div>
+            <input id="fixEmail" type="email" placeholder="若收不到邮件请填写常用邮箱" style="width:100%;margin-top:.35rem;padding:.55rem .65rem;border-radius:10px;border:1px solid var(--line)" value="${esc(data.candidate_email || "")}" />
+            <button class="secondary" id="saveEmailBtn" style="width:100%;margin-top:.55rem">保存邮箱</button>
+          </div>`;
+        setTimeout(() => {
+          const btn = document.getElementById("saveEmailBtn");
+          if (btn) btn.onclick = () => act("update_contact", undefined, document.getElementById("fixEmail")?.value || "");
+        }, 0);
+      }
       document.getElementById("result").innerHTML = "";
       document.getElementById("slots").classList.add("hidden");
       document.getElementById("slots").innerHTML = "";
@@ -222,10 +235,18 @@
       };
     }
 
-    async function act(action, slotIndex) {
+    async function act(action, slotIndex, emailOverride) {
       setBusy(true);
       const body = { action };
       if (typeof slotIndex === "number") body.slot_index = slotIndex;
+      if (action === "update_contact") {
+        body.email = String(emailOverride || "").trim();
+        if (!body.email) {
+          setBusy(false);
+          document.getElementById("result").innerHTML = `<div class="msg err">请填写邮箱</div>`;
+          return;
+        }
+      }
       const res = await fetch("/v1/public/reply/" + encodeURIComponent(token), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -236,6 +257,11 @@
       if (!res.ok) {
         document.getElementById("result").innerHTML =
           `<div class="msg err">${esc(data.error || "提交失败")}</div>`;
+        return;
+      }
+      if (action === "update_contact" && data.view) {
+        render(data.view);
+        document.getElementById("result").innerHTML = `<div class="msg ok">邮箱已更新</div>`;
         return;
       }
       if (action === "reschedule" && data.view) {

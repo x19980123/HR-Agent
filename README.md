@@ -1,5 +1,7 @@
 # 多 Agent 智能招聘系统（Go + Python）
 
+**v2.0.0** — 招聘工作台：批量导入、三档筛选、多轮约面、Scheduling Agent、Offer MVP。
+
 面向招聘侧的 AI 流程辅助：HR 上传简历与 JD → 解析初筛 → 飞书约面发信 → 候选人点链接回复 → **确认后再出题**。
 
 ## 架构
@@ -20,8 +22,11 @@ HR 管理台 /admin
 
 ```
 services/          # Go：API / mailer / ingress + 嵌入式 web
-python/hr_agent/   # LangGraph Agent
+  web/admin-ui/    # Vue 3 + Naive UI 管理台（新）
+  web/admin/       # 旧单页 index.html（逐步下线）
+python/hr_agent/   # LangGraph Agent（见 docs/PROJECT-STRUCTURE.md）
 deploy/            # MySQL init + docker-compose
+docs/              # V2 方案、全招聘计划 FULL-RECRUITING-PLAN、PROJECT-STRUCTURE
 samples/           # 示例简历
 scripts/           # 联调测试
 ```
@@ -34,10 +39,13 @@ scripts/           # 联调测试
 cp .env.example .env
 ```
 
-关键项：
+关键项见 [`.env.example`](.env.example)：**DeepSeek / DashScope 厂商块** + 各步 `*_VENDOR` / `*_MODEL`；RAG 与校验 Chat 共用 `DASHSCOPE_API_KEY`。旧版 `LLM_*` 仍兼容。
 
 | 变量 | 说明 |
 |------|------|
+| `DEEPSEEK_*` / `DASHSCOPE_*` | 厂商 Key/Base/默认 Chat 模型 |
+| `LLM_DEFAULT_VENDOR` | 步骤未指定 `*_VENDOR` 时的默认厂商 |
+| `PARSE_VERIFY_*` | 2.0 双模型校验（DashScope 校验路） |
 | `REPLY_TIMEOUT_HOURS` | 默认 `48` |
 | `PUBLIC_BASE_URL` | 邮件链接前缀，如 `http://127.0.0.1:8080` |
 | `REPLY_TOKEN_SECRET` | 候选人链接 HMAC 密钥 |
@@ -60,6 +68,21 @@ go build -o bin/api.exe ./cmd/api
 go build -o bin/mailer.exe ./cmd/mailer
 .\bin\api.exe
 ```
+
+管理台 HTML 在 **`services/web/admin/index.html`**（旧版单页，仍默认）。从 `services` 目录启动时，API **优先读磁盘上的该文件**；仅当找不到文件时才用编译进 `api.exe` 的内嵌版本。启动日志会打印 `admin UI source: file:…` 或 `embed`。
+
+**新版（Vue 3 + Naive UI）**：源码在 **`services/web/admin-ui/`**。开发：
+
+```bash
+cd services/web/admin-ui
+npm install
+npm run dev
+```
+
+浏览器打开 <http://127.0.0.1:5173/admin/>（Vite 代理 `/v1` → `:8080`，需 Go API 已启动）。  
+生产切换：在 `admin-ui` 下 `npm run build`，设置环境变量 **`HR_ADMIN_VUE=1`** 后重启 Go，从 `admin-ui/dist` 提供 SPA（含 `/admin/assets/*` 与前端路由）。功能已与旧单页对齐，验证通过后可设 `HR_ADMIN_VUE=1` 并停用旧 `admin/index.html`。
+
+批量 import 与简历邮箱策略见 [`docs/CANDIDATE-CONTACT-SCHEME.md`](docs/CANDIDATE-CONTACT-SCHEME.md)。
 
 Go 启动时会**自动**向上查找并加载仓库根目录的 `.env`（`config.Load` + `godotenv`），一般**不必**再跑 `scripts/load_env.ps1`。  
 `load_env.ps1` 仅在你用裸 `python scripts/*.py`、或要在当前 shell 里临时覆盖变量时才有用。
@@ -107,6 +130,7 @@ curl -X POST http://127.0.0.1:8080/v1/public/reply/TOKEN ^
 ## 状态机
 
 `uploaded → parsing → screened → awaiting_reply → confirmed|declined|needs_human`  
+多轮：`advance` 进入下一轮约面；末轮 pass → `offer_status=pending`。  
 
 - 筛选失败 → `rejected`
 - 确认后异步写 `questions_json`（失败不回滚 confirmed）

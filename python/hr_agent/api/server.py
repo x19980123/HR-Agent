@@ -56,6 +56,7 @@ try:
         return {
             "status": "ok",
             "offline_mode": str(settings.offline_mode or not bool(settings.openai_api_key)),
+            "llm": settings.llm_config_summary(),
             "rag": rag_store.stats(),
         }
 
@@ -78,6 +79,16 @@ try:
     @app.post("/v1/rag/query")
     def rag_query(req: RagQueryReq):
         return {"items": rag_store.retrieve(req.query, req.k)}
+
+    class ExtractContactReq(BaseModel):
+        resume_path: str = ""
+        resume_text: str = ""
+
+    @app.post("/v1/extract-contact")
+    def extract_contact_api(req: ExtractContactReq):
+        from hr_agent.agents.contact_extract import extract_contact
+
+        return extract_contact(resume_path=req.resume_path, resume_text=req.resume_text)
 
     def _parse_screen(req: PipelineReq):
         try:
@@ -135,6 +146,36 @@ try:
                 "preferred_windows": [],
                 "selected_slot_index": None,
                 "error": redact(str(e)),
+            }
+
+    class SchedulingAssignReq(BaseModel):
+        application_id: str = ""
+        round_index: int = 0
+        jd_round_id: str = ""
+        jd_department: str = ""
+        duration_minutes: int = 60
+        requirements: list[dict] = Field(default_factory=list)
+        candidates: list[dict] = Field(default_factory=list)
+        busy_intervals: list[dict] = Field(default_factory=list)
+        window_start: str = ""
+        window_end: str = ""
+
+    @app.post("/v1/scheduling/assign")
+    def scheduling_assign_api(req: SchedulingAssignReq):
+        from hr_agent.agents.scheduling_assign import run_scheduling_assign
+
+        try:
+            return run_scheduling_assign(req.model_dump())
+        except Exception as e:  # noqa: BLE001
+            return {
+                "assigned_open_ids": [],
+                "by_role": [],
+                "needs_human": True,
+                "human_reason_code": "scheduling_agent_error",
+                "error": redact(str(e)),
+                "rationale": "",
+                "verify_detail": {},
+                "assignment_detail": {"resolver": "scheduling_agent", "error": redact(str(e))},
             }
 
     def main() -> None:

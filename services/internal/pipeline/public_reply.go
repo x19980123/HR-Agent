@@ -22,11 +22,13 @@ type PublicSlot struct {
 type PublicReplyView struct {
 	ApplicationID    string       `json:"application_id"`
 	CandidateName    string       `json:"candidate_name"`
+	CandidateEmail   string       `json:"candidate_email"`
 	JDTitle          string       `json:"jd_title"`
 	Status           string       `json:"status"`
 	ExpiresAt        time.Time    `json:"expires_at"`
 	ReplyHours       int          `json:"reply_hours"`
 	CanAct           bool         `json:"can_act"`
+	CanUpdateEmail   bool         `json:"can_update_email"`
 	Message          string       `json:"message,omitempty"`
 	Slots            []PublicSlot `json:"slots"`
 	RescheduleMode   bool         `json:"reschedule_mode"`
@@ -41,11 +43,11 @@ func (s *Service) PublicReplyView(ctx context.Context, token string) (*PublicRep
 	if err != nil {
 		return nil, err
 	}
-	var name, status, jdID string
+	var name, email, status, jdID string
 	var rescheduleCount int
 	err = s.DB.QueryRowContext(ctx,
-		`SELECT candidate_name, status, jd_id, reschedule_count FROM applications WHERE id=?`, claims.AppID,
-	).Scan(&name, &status, &jdID, &rescheduleCount)
+		`SELECT candidate_name, candidate_email, status, jd_id, reschedule_count FROM applications WHERE id=?`, claims.AppID,
+	).Scan(&name, &email, &status, &jdID, &rescheduleCount)
 	if err != nil {
 		return nil, fmt.Errorf("application not found")
 	}
@@ -74,11 +76,13 @@ func (s *Service) PublicReplyView(ctx context.Context, token string) (*PublicRep
 	view := &PublicReplyView{
 		ApplicationID:   claims.AppID,
 		CandidateName:   name,
+		CandidateEmail:  email,
 		JDTitle:         jdTitle,
 		Status:          status,
 		ExpiresAt:       time.Unix(claims.Exp, 0),
 		ReplyHours:      hours,
 		CanAct:          status == db.StatusAwaitingReply,
+		CanUpdateEmail:  status == db.StatusAwaitingReply,
 		Slots:           slots,
 		RescheduleMode:  rescheduleMode,
 		RescheduleCount: rescheduleCount,
@@ -129,7 +133,7 @@ func (s *Service) loadPublicSlots(ctx context.Context, appID string) ([]PublicSl
 }
 
 // HandlePublicAction applies structured candidate actions without LLM classify.
-func (s *Service) HandlePublicAction(ctx context.Context, token, action string, slotIndex *int) error {
+func (s *Service) HandlePublicAction(ctx context.Context, token, action string, slotIndex *int, email string) error {
 	claims, err := replytoken.Verify(s.Cfg.ReplyTokenSecret, token)
 	if err != nil {
 		return err
@@ -157,6 +161,11 @@ func (s *Service) HandlePublicAction(ctx context.Context, token, action string, 
 	}
 
 	switch action {
+	case "update_contact":
+		if email == "" {
+			return fmt.Errorf("email required")
+		}
+		return s.UpdateApplicationContactFromCandidate(ctx, appID, email)
 	case "accept", "pick_slot":
 		return s.confirm(ctx, appID, slotIndex)
 	case "decline":

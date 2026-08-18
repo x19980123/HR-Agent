@@ -14,14 +14,12 @@ func NewFromConfig(cfg *config.Config) (Provider, error) {
 		return NewMemoryProvider(), nil
 	case "feishu", "lark":
 		p, err := NewFeishuProvider(FeishuConfig{
-			AppID:             cfg.FeishuAppID,
-			AppSecret:         cfg.FeishuAppSecret,
-			CalendarID:        cfg.FeishuCalendarID,
-			InterviewerUserID: cfg.FeishuInterviewerUserID,
-			InterviewerName:   cfg.FeishuInterviewerName,
-			UserIDType:        cfg.FeishuUserIDType,
-			Timezone:          cfg.FeishuTimezone,
-			Location:          cfg.FeishuLocation,
+			AppID:      cfg.FeishuAppID,
+			AppSecret:  cfg.FeishuAppSecret,
+			CalendarID: cfg.FeishuCalendarID,
+			UserIDType: cfg.FeishuUserIDType,
+			Timezone:   cfg.FeishuTimezone,
+			Location:   cfg.FeishuLocation,
 		})
 		if err != nil {
 			return nil, err

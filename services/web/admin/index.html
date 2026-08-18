@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="hr-admin-ui-build" content="v2-alpha-20260808" />
   <title>HR Agent</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -442,7 +443,7 @@
       <button class="nav-btn" data-v="human">人工台</button>
       <button class="nav-btn" data-v="create">上传简历</button>
       <button class="nav-btn" data-v="jds">岗位 JD</button>
-      <button class="nav-btn" data-v="bank">题库 RAG</button>
+      <button class="nav-btn" data-v="bank" id="navBank">题库 RAG</button>
       <button class="nav-btn hidden" data-v="staff" id="navStaff">成员管理</button>
       <div class="spacer"></div>
       <div class="user-box">
@@ -529,15 +530,20 @@
     }
 
     let currentIsAdmin = false;
+    let currentCanManageQBank = false;
     async function enterApp(me) {
       $("login").classList.add("hidden");
       $("app").classList.remove("hidden");
       const name = (me && me.user && me.user.name) || "已登录";
       currentIsAdmin = !!(me && (me.is_admin || (me.user && me.user.is_admin)));
+      currentCanManageQBank = !!(me && (me.can_manage_question_bank || (me.user && me.user.can_manage_question_bank)));
       $("userChip").textContent = name;
-      $("userMeta").textContent = (me.auth === "feishu" ? "飞书账号" : "API Token") + (currentIsAdmin ? " · 管理员" : "");
+      const qHint = currentCanManageQBank ? "" : " · 无题库权限";
+      $("userMeta").textContent = (me.auth === "feishu" ? "飞书账号" : "API Token") + (currentIsAdmin ? " · 管理员" : "") + qHint;
       const navStaff = $("navStaff");
       if (navStaff) navStaff.classList.toggle("hidden", !currentIsAdmin);
+      const navBank = $("navBank");
+      if (navBank) navBank.classList.toggle("hidden", !currentCanManageQBank);
       await renderStats();
       showView("stats");
     }
@@ -588,7 +594,10 @@
       if (v === "human") await renderHumanDesk();
       if (v === "create") await renderCreate();
       if (v === "jds") await renderJDs();
-      if (v === "bank") await renderBank();
+      if (v === "bank") {
+        if (!currentCanManageQBank) { showToast("无题库管理权限", true); return; }
+        await renderBank();
+      }
       if (v === "staff") {
         if (!currentIsAdmin) { showToast("仅系统管理员可进入成员管理", true); return; }
         await renderStaff();
@@ -752,6 +761,9 @@
     function canHumanApprove(status) {
       return ["needs_human", "rejected", "failed", "screened", "questions_ready"].includes(status);
     }
+    function canHumanApproveApp(app) {
+      return canHumanApprove(app.status) && app.error_kind !== "system";
+    }
     function renderLiveLog(audits, processing) {
       const rows = (audits || []).slice().reverse(); // oldest first for reading
       const lines = rows.length
@@ -824,25 +836,37 @@
     }
 
     async function renderHumanDesk() {
-      const [nh, rj, fl] = await Promise.all([
+      const [nh, rj, fl, sys] = await Promise.all([
         api("/v1/admin/applications?status=needs_human"),
         api("/v1/admin/applications?status=rejected"),
         api("/v1/admin/applications?status=failed"),
+        api("/v1/admin/applications?error_kind=system"),
       ]);
       const items = [...(nh.items || []), ...(rj.items || []), ...(fl.items || [])]
+        .filter((a, i, arr) => arr.findIndex((x) => x.id === a.id) === i)
         .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+      const sysItems = (sys.items || []).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
       const rows = items.map((a) => `
         <tr>
           <td><a href="#" data-id="${a.id}">${esc((a.candidate_name || "未命名").trim() || a.id.slice(0,8))}</a>
             <div class="muted" style="font-size:.78rem;margin-top:.15rem">${esc(a.id.slice(0, 8))}…</div></td>
           <td>${esc(a.candidate_email || "-")}</td>
-          <td>${badge(a.status)}</td>
+          <td>${badge(a.status)}${a.error_kind === "system" ? ` <span class="badge failed">系统</span>` : ""}</td>
           <td class="muted">${fmtTime(a.updated_at)}</td>
           <td style="display:flex;gap:.4rem;flex-wrap:wrap">
             <button class="btn" data-open="${a.id}">处理</button>
             ${canRetryParse(a.status) ? `<button class="btn" data-retry="${a.id}">重试解析</button>` : ""}
-            ${canHumanApprove(a.status) ? `<button class="btn primary" data-approve="${a.id}">人工通过</button>` : ""}
+            ${canHumanApproveApp(a) ? `<button class="btn primary" data-approve="${a.id}">人工通过</button>` : ""}
           </td>
+        </tr>`).join("");
+      const sysRows = sysItems.map((a) => `
+        <tr>
+          <td><a href="#" data-id="${a.id}">${esc((a.candidate_name || "未命名").trim() || a.id.slice(0,8))}</a>
+            <div class="muted" style="font-size:.78rem;margin-top:.15rem">${esc(a.system_error_code || a.id.slice(0, 8))}</div></td>
+          <td>${esc(a.candidate_email || "-")}</td>
+          <td>${badge(a.status)}</td>
+          <td class="muted">${fmtTime(a.updated_at)}</td>
+          <td><button class="btn" data-open="${a.id}">查看</button></td>
         </tr>`).join("");
       $("view-human").innerHTML = `
         <div class="page-head">
@@ -864,6 +888,13 @@
           <table>
             <thead><tr><th>候选人</th><th>邮箱</th><th>状态</th><th>更新</th><th>操作</th></tr></thead>
             <tbody>${rows || `<tr><td colspan="5"><div class="empty">暂无待人工处理的申请</div></td></tr>`}</tbody>
+          </table>
+        </div>
+        <div class="panel" style="margin-top:1rem">
+          <div class="section-title">系统异常队列 <span class="muted" style="font-weight:500">（不可人工通过，需排查后重试解析）</span></div>
+          <table>
+            <thead><tr><th>候选人</th><th>邮箱</th><th>状态</th><th>更新</th><th>操作</th></tr></thead>
+            <tbody>${sysRows || `<tr><td colspan="5"><div class="empty">暂无系统异常</div></td></tr>`}</tbody>
           </table>
         </div>`;
       $("refreshHuman").onclick = () => renderHumanDesk();
@@ -916,7 +947,8 @@
       const screen = app.screen || {};
       const jd = app.jd || {};
       const canRetry = canRetryParse(app.status);
-      const canApprove = canHumanApprove(app.status);
+      const canApprove = canHumanApproveApp(app);
+      const systemFault = app.error_kind === "system";
       const processing = isProcessingStatus(app.status);
       $("view-detail").innerHTML = `
         <div class="page-head">
@@ -936,6 +968,7 @@
           <div class="section-title">流程步骤</div>
           <div id="detailStepper">${renderStepper(app.status)}</div>
           ${renderParseReason(app)}
+          ${systemFault ? `<div class="alert danger"><strong>系统异常</strong><div style="margin-top:.35rem">${esc(app.system_error_code || app.error_message || "Agent/依赖服务失败")} — 请先排查配置或依赖，再「重试解析」；不可人工通过绕过。</div></div>` : ""}
           <div id="detailLogWrap">${renderLiveLog(audits, processing)}</div>
           ${canRetry ? `<label style="margin-top:.85rem">重试时可粘贴简历全文（扫描 PDF 推荐）</label>
             <textarea id="retryText" placeholder="可选：粘贴可读简历文本后点「重试解析」…" style="min-height:90px"></textarea>` : ""}
@@ -1173,6 +1206,24 @@
               <button class="btn primary" id="cSubmit">创建并启动流程</button>
               <span id="cMsg" class="muted"></span>
             </div>
+            <hr style="margin:1.5rem 0;border:0;border-top:1px solid var(--line)" />
+            <div class="section-title">批量导入（2.0）</div>
+            <p class="muted" style="margin:.35rem 0 .75rem;line-height:1.5">一次选择多份简历，后台异步创建申请；邮箱可留空，将使用占位地址。</p>
+            <div class="create-fields">
+              <div class="full"><label>批量简历（多选）</label><input id="cBatchFiles" type="file" accept=".pdf,.doc,.docx,.txt" multiple /></div>
+              <div class="full"><label>映射 CSV（可选）</label><input id="cBatchCsv" type="file" accept=".csv" />
+              <div class="muted" style="font-size:.82rem;margin-top:.35rem">表头：filename, email, name（按文件名匹配）</div></div>
+              <div class="full"><label>或 zip 压缩包</label><input id="cBatchZip" type="file" accept=".zip" /></div>
+              <div class="full"><label>默认邮箱（可选）</label><input id="cBatchEmail" placeholder="留空 → candidate@import.local" />
+              <div class="muted" style="font-size:.82rem;margin-top:.35rem;line-height:1.5">
+                每个文件一条申请、一个邮箱。只传 1 份时可填真实邮箱；多份时会生成 import1@域名、import2@域名（从所填地址的 @ 后取域名；留空用占位域）。
+              </div></div>
+            </div>
+            <div style="margin-top:.85rem;display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
+              <button class="btn" id="cBatchSubmit">提交批量导入</button>
+              <span id="cBatchMsg" class="muted"></span>
+            </div>
+            <div id="cBatchStatus" class="muted" style="margin-top:.65rem;font-size:.9rem"></div>
           </div>
           <aside class="create-side" id="cProgressWrap">${createIdleHint()}</aside>
         </div>`;
@@ -1213,6 +1264,46 @@
         } catch (e) {
           $("cMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
           $("cProgressWrap").innerHTML = renderCreateProgress({ status: "failed", error_message: e.message }, false);
+          btn.disabled = false;
+        }
+      };
+      $("cBatchSubmit").onclick = async () => {
+        const files = $("cBatchFiles").files;
+        const zip = $("cBatchZip").files && $("cBatchZip").files[0];
+        if ((!files || !files.length) && !zip) { showToast("请选择简历文件或 zip", true); return; }
+        const jd = $("cJd").value;
+        if (!jd) { showToast("请先选择岗位 JD", true); return; }
+        const btn = $("cBatchSubmit");
+        btn.disabled = true;
+        $("cBatchMsg").textContent = "上传中…";
+        $("cBatchStatus").textContent = "";
+        try {
+          const fd = new FormData();
+          fd.append("jd_id", jd);
+          const def = $("cBatchEmail").value.trim();
+          if (def) fd.append("default_email", def);
+          for (let i = 0; i < (files ? files.length : 0); i++) fd.append("resume", files[i]);
+          const csv = $("cBatchCsv").files && $("cBatchCsv").files[0];
+          if (csv) fd.append("mapping_csv", csv);
+          if (zip) fd.append("archive", zip);
+          const headers = {};
+          if (token) headers["Authorization"] = "Bearer " + token;
+          const res = await fetch("/v1/admin/imports", { method: "POST", headers, body: fd, credentials: "include" });
+          const out = await res.json().catch(() => ({}));
+          if (!res.ok && res.status !== 202) throw new Error(out.error || res.statusText);
+          const jobId = out.job_id;
+          $("cBatchMsg").textContent = `已创建任务 ${jobId}，共 ${out.total || files.length} 份`;
+          const poll = async () => {
+            const job = await api("/v1/admin/imports/" + jobId);
+            const total = job.total || out.total || files.length;
+            const done = (job.succeeded || 0) + (job.failed || 0);
+            $("cBatchStatus").textContent = `进度：${done}/${total}（成功 ${job.succeeded || 0}，失败 ${job.failed || 0}）`;
+            if (done < total) setTimeout(poll, 2000);
+          };
+          poll();
+        } catch (e) {
+          $("cBatchMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+        } finally {
           btn.disabled = false;
         }
       };
@@ -1457,6 +1548,7 @@
           m.is_admin ? "管理员" : "",
           m.is_hr ? "HR" : "",
           m.is_interviewer ? "面试官" : "",
+          m.can_manage_question_bank ? "题库" : "",
         ].filter(Boolean).join(" / ") || "-";
         const canDisable = m.enabled && !m.is_admin;
         return `<tr>
@@ -1608,6 +1700,9 @@
               <input type="checkbox" id="sInt" ${(item ? !!item.is_interviewer : false) ? "checked" : ""} ${(item && item.is_admin) ? "disabled" : ""} /> 面试官（仅排期查忙闲，不改飞书日历权限）
             </label>
             <label class="check">
+              <input type="checkbox" id="sQBank" ${(item ? !!item.can_manage_question_bank : false) ? "checked" : ""} ${(item && item.is_admin) ? "disabled" : ""} /> 题库 RAG 管理（上传/重建索引）
+            </label>
+            <label class="check">
               <input type="checkbox" id="sEn" ${(item ? item.enabled !== false : true) ? "checked" : ""} ${(item && item.is_admin) ? "disabled" : ""} /> 启用
             </label>
             <div class="modal-actions">
@@ -1624,6 +1719,7 @@
           email: $("sEmail").value.trim(),
           is_hr: $("sHR").checked,
           is_interviewer: $("sInt").checked,
+          can_manage_question_bank: $("sQBank").checked,
           enabled: $("sEn").checked,
         };
         if (!payload.open_id) { showToast("open_id 必填", true); return; }

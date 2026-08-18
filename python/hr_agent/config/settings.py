@@ -49,22 +49,60 @@ class LLMEndpoint:
     api_key: str
     api_base: str
     model: str
+    vendor: str = ""
 
     def enabled(self) -> bool:
         return bool(self.api_key) and bool(self.model)
 
 
+def _vendor_chat_endpoint(vendor: str, model_override: str = "") -> LLMEndpoint:
+    """Resolve chat endpoint from a vendor id + optional model name."""
+    v = (vendor or "").strip().lower()
+    if not v:
+        return LLMEndpoint("", "", model_override or "", vendor="")
+
+    if v == "deepseek":
+        key = _env_first("DEEPSEEK_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY")
+        base = _env_first("DEEPSEEK_API_BASE", "LLM_API_BASE", "OPENAI_API_BASE") or "https://api.deepseek.com"
+        default_model = _env("DEEPSEEK_CHAT_MODEL", "deepseek-chat")
+    elif v in ("dashscope", "aliyun"):
+        key = _env_first("DASHSCOPE_API_KEY", "EMBEDDING_API_KEY")
+        base = _env_first(
+            "DASHSCOPE_CHAT_API_BASE",
+            "EMBEDDING_API_BASE",
+            default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        default_model = _env("DASHSCOPE_CHAT_MODEL", "qwen-plus")
+    elif v == "openai":
+        key = _env_first("OPENAI_API_KEY", "LLM_API_KEY")
+        base = _env_first("OPENAI_API_BASE", "LLM_API_BASE") or "https://api.openai.com/v1"
+        default_model = _env("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+    else:
+        prefix = v.upper().replace("-", "_")
+        key = _env(f"{prefix}_API_KEY")
+        base = _env(f"{prefix}_API_BASE")
+        default_model = _env(f"{prefix}_CHAT_MODEL")
+
+    model = model_override or default_model
+    return LLMEndpoint(key, base, model, vendor=v)
+
+
 class Settings:
     def __init__(self) -> None:
-        # Default LLM (preferred LLM_* ; OPENAI_* kept as alias)
-        self.llm_api_key = _env_first("LLM_API_KEY", "OPENAI_API_KEY")
-        self.llm_api_base = _env_first("LLM_API_BASE", "OPENAI_API_BASE")
-        self.llm_default_model = _env_first("LLM_DEFAULT_MODEL", "PARSE_MODEL", default="gpt-4o-mini")
+        # --- Legacy flat LLM (still supported) ---
+        self.llm_api_key = _env_first("LLM_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY")
+        self.llm_api_base = _env_first("LLM_API_BASE", "OPENAI_API_BASE", "DEEPSEEK_API_BASE")
+        self.llm_default_model = _env_first("LLM_DEFAULT_MODEL", default="gpt-4o-mini")
+        self.llm_default_vendor = _env("LLM_DEFAULT_VENDOR", "")
 
-        # Backward-compatible aliases used by older code paths
         self.openai_api_key = self.llm_api_key
         self.openai_api_base = self.llm_api_base
 
+        # --- Vendor profiles (keys reused by model / step via VENDOR=...) ---
+        self.deepseek = _vendor_chat_endpoint("deepseek", _env("DEEPSEEK_CHAT_MODEL", ""))
+        self.dashscope_chat = _vendor_chat_endpoint("dashscope", _env("DASHSCOPE_CHAT_MODEL", ""))
+
+        # --- Pipeline steps ---
         self.parse = self._step("PARSE", self.llm_default_model)
         self.screen = self._step("SCREEN", self.llm_default_model)
         self.question = self._step("QUESTION", self.llm_default_model)
@@ -75,13 +113,42 @@ class Settings:
         self.question_model = self.question.model
         self.classify_model = self.classify.model
 
-        # Embedding / RAG
+        # --- 2.0: dual-model parse verify (config ready; code in v2.0-alpha) ---
+        self.parse_verify_enabled = _env_bool("PARSE_VERIFY_ENABLED", False)
+        self.parse_verify_mode = _env("PARSE_VERIFY_MODE", "dual_llm")  # rules | dual_llm
+        verify_vendor = _env_first("PARSE_VERIFY_VENDOR", default="dashscope")
+        verify_model = _env("PARSE_VERIFY_MODEL", "")
+        self.parse_verify = _vendor_chat_endpoint(verify_vendor, verify_model)
+        self.parse_verify_field_diff_threshold = float(
+            _env("PARSE_VERIFY_FIELD_DIFF_THRESHOLD", "0.75") or "0.75"
+        )
+
+        # --- Scheduling assign + verify (Phase 3) ---
+        self.scheduling_agent_enabled = _env_bool("SCHEDULING_AGENT_ENABLED", True)
+        sched_vendor = _env_first("SCHEDULING_VENDOR", default=_env("LLM_DEFAULT_VENDOR", "deepseek"))
+        sched_model = _env("SCHEDULING_MODEL", "")
+        self.scheduling = _vendor_chat_endpoint(sched_vendor, sched_model)
+        self.scheduling_llm_refine = _env_bool("SCHEDULING_LLM_REFINE", True)
+        self.scheduling_verify_enabled = _env_bool("SCHEDULING_VERIFY_ENABLED", True)
+        self.scheduling_verify_mode = _env("SCHEDULING_VERIFY_MODE", "dual_llm")  # rules | dual_llm
+        sv_vendor = _env_first("SCHEDULING_VERIFY_VENDOR", default="dashscope")
+        sv_model = _env("SCHEDULING_VERIFY_MODEL", "")
+        self.scheduling_verify = _vendor_chat_endpoint(sv_vendor, sv_model)
+        self.scheduling_verify_score_threshold = float(
+            _env("SCHEDULING_VERIFY_SCORE_THRESHOLD", "0.75") or "0.75"
+        )
+
+        self.screen_tier_reject_max = float(_env("SCREEN_TIER_REJECT_MAX", "30") or "30")
+        self.screen_tier_pass_min = float(_env("SCREEN_TIER_PASS_MIN", "60") or "60")
+
+        # --- Embedding / RAG (DashScope; key shared with chat vendor) ---
         self.dashscope_api_key = _env_first("DASHSCOPE_API_KEY", "EMBEDDING_API_KEY")
         self.embedding_provider = (_env("EMBEDDING_PROVIDER", "dashscope") or "dashscope").lower()
         self.embedding = LLMEndpoint(
-            api_key=_env_first("DASHSCOPE_API_KEY", "EMBEDDING_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"),
-            api_base=_env_first("EMBEDDING_API_BASE", "LLM_API_BASE", "OPENAI_API_BASE"),
-            model=_env("EMBEDDING_MODEL", ""),
+            api_key=self.dashscope_api_key or _env_first("LLM_API_KEY", "OPENAI_API_KEY"),
+            api_base=_env_first("EMBEDDING_API_BASE", "DASHSCOPE_EMBEDDING_API_BASE", default="https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            model=_env("EMBEDDING_MODEL", "qwen3.7-text-embedding"),
+            vendor="dashscope",
         )
         self.rerank_enabled = _env_bool("RERANK_ENABLED", True)
         self.rerank_model = _env("RERANK_MODEL", "gte-rerank-v2")
@@ -101,19 +168,76 @@ class Settings:
         self.offline_mode = _env_bool("OFFLINE_MODE", True)
 
     def _step(self, prefix: str, default_model: str) -> LLMEndpoint:
+        model = _env_first(f"{prefix}_MODEL", "LLM_DEFAULT_MODEL", default=default_model)
+        vendor = _env_first(f"{prefix}_VENDOR", "LLM_DEFAULT_VENDOR")
+        if vendor:
+            ep = _vendor_chat_endpoint(vendor, model)
+            step_key = _env_first(f"{prefix}_API_KEY")
+            step_base = _env_first(f"{prefix}_API_BASE")
+            if step_key:
+                return LLMEndpoint(
+                    step_key,
+                    step_base or ep.api_base,
+                    ep.model or model,
+                    vendor=ep.vendor or vendor,
+                )
+            return ep
+
         return LLMEndpoint(
-            api_key=_env_first(f"{prefix}_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY"),
-            api_base=_env_first(f"{prefix}_API_BASE", "LLM_API_BASE", "OPENAI_API_BASE"),
-            model=_env_first(f"{prefix}_MODEL", "LLM_DEFAULT_MODEL", default=default_model),
+            api_key=_env_first(f"{prefix}_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"),
+            api_base=_env_first(f"{prefix}_API_BASE", "LLM_API_BASE", "OPENAI_API_BASE", "DEEPSEEK_API_BASE"),
+            model=model,
+            vendor=self.llm_default_vendor or "legacy",
         )
 
     def endpoint_for(self, step: str) -> LLMEndpoint:
         return {
             "parse": self.parse,
+            "parse_verify": self.parse_verify,
             "screen": self.screen,
             "question": self.question,
             "classify": self.classify,
+            "scheduling": self.scheduling,
+            "scheduling_verify": self.scheduling_verify,
         }.get(step, LLMEndpoint(self.llm_api_key, self.llm_api_base, self.llm_default_model))
+
+    def llm_config_summary(self) -> dict:
+        """Safe summary for /health (no secrets)."""
+        def _pub(ep: LLMEndpoint) -> dict:
+            return {
+                "vendor": ep.vendor or None,
+                "model": ep.model,
+                "api_base": ep.api_base,
+                "configured": ep.enabled(),
+            }
+
+        return {
+            "default_vendor": self.llm_default_vendor or None,
+            "offline_mode": self.offline_mode,
+            "steps": {
+                "parse": _pub(self.parse),
+                "parse_verify": _pub(self.parse_verify),
+                "screen": _pub(self.screen),
+                "question": _pub(self.question),
+                "classify": _pub(self.classify),
+                "scheduling": _pub(self.scheduling),
+                "scheduling_verify": _pub(self.scheduling_verify),
+            },
+            "parse_verify_enabled": self.parse_verify_enabled,
+            "parse_verify_mode": self.parse_verify_mode,
+            "scheduling_agent_enabled": self.scheduling_agent_enabled,
+            "scheduling_verify_enabled": self.scheduling_verify_enabled,
+            "scheduling_verify_mode": self.scheduling_verify_mode,
+            "embedding": {
+                "provider": self.embedding_provider,
+                "model": self.embedding.model,
+                "configured": self.embedding.enabled(),
+            },
+            "rerank": {
+                "enabled": self.rerank_enabled,
+                "model": self.rerank_model if self.rerank_enabled else None,
+            },
+        }
 
 
 @lru_cache(maxsize=1)

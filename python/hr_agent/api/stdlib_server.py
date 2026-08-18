@@ -43,6 +43,7 @@ class Handler(BaseHTTPRequestHandler):
                     "llm_backend": llm.llm_backend(),
                     "offline_mode": settings.offline_mode,
                     "model": settings.parse_model,
+                    "llm": settings.llm_config_summary(),
                     "rag": rag_store.stats(),
                 },
             )
@@ -100,6 +101,21 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/v1/rag/query":
                 docs = rag_store.retrieve(str(req.get("query") or ""), int(req.get("k") or 4))
                 self._json(200, {"items": docs})
+                return
+            if path == "/v1/extract-contact":
+                from hr_agent.agents.contact_extract import extract_contact
+
+                out = extract_contact(
+                    resume_path=str(req.get("resume_path") or ""),
+                    resume_text=str(req.get("resume_text") or ""),
+                )
+                self._json(200, out)
+                return
+            if path == "/v1/scheduling/assign":
+                from hr_agent.agents.scheduling_assign import run_scheduling_assign
+
+                out = run_scheduling_assign(req)
+                self._json(200, out)
                 return
             self._json(404, {"error": "not found"})
         except Exception as e:  # noqa: BLE001

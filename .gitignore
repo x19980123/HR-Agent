@@ -10,3 +10,7 @@ python/.venv/
 .idea/
 .vscode/
 services/_envtest/
+services/web/admin-ui/node_modules/
+services/web/admin-ui/dist/
+*.tsbuildinfo
+services/web/admin-ui/vite.config.js

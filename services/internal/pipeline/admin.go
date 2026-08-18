@@ -42,12 +42,17 @@ func (s *Service) ListJDs(ctx context.Context) ([]map[string]any, error) {
 		if err := rows.Scan(&id, &title, &dept, &salary, &loc, &desc, &req, &weight, &created); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{
+		item := map[string]any{
 			"id": id, "title": title, "department": dept,
 			"salary": salary, "location": loc, "description": desc,
 			"requirements": jsonRaw(string(req)), "weights": jsonRaw(string(weight)),
 			"created_at": created,
-		})
+		}
+		if rounds, rerr := s.ListJDRounds(ctx, id); rerr == nil {
+			item["rounds"] = rounds
+			item["round_count"] = len(rounds)
+		}
+		out = append(out, item)
 	}
 	return out, nil
 }
@@ -64,12 +69,19 @@ func (s *Service) GetJD(ctx context.Context, id string) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"id": id, "title": title, "department": dept,
 		"salary": salary, "location": loc, "description": desc,
 		"requirements": jsonRaw(string(req)), "weights": jsonRaw(string(weight)),
 		"created_at": created,
-	}, nil
+	}
+	rounds, rerr := s.ListJDRounds(ctx, id)
+	if rerr != nil {
+		return nil, rerr
+	}
+	out["rounds"] = rounds
+	out["round_count"] = len(rounds)
+	return out, nil
 }
 
 func (s *Service) UpsertJD(ctx context.Context, in JDInput) (string, error) {
@@ -133,21 +145,25 @@ func (s *Service) DeleteJD(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Service) ListApplications(ctx context.Context, status string, limit int) ([]map[string]any, error) {
+func (s *Service) ListApplications(ctx context.Context, status, errorKind string, limit int) ([]map[string]any, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	var rows *sql.Rows
-	var err error
+	q := `SELECT id, jd_id, candidate_email, candidate_name, status, reschedule_count, resume_path,
+	       COALESCE(error_kind,'none'), human_reason_code, system_error_code, created_at, updated_at
+	       FROM applications WHERE 1=1`
+	var args []any
 	if status != "" {
-		rows, err = s.DB.QueryContext(ctx,
-			`SELECT id, jd_id, candidate_email, candidate_name, status, reschedule_count, resume_path, created_at, updated_at
-			 FROM applications WHERE status=? ORDER BY updated_at DESC LIMIT ?`, status, limit)
-	} else {
-		rows, err = s.DB.QueryContext(ctx,
-			`SELECT id, jd_id, candidate_email, candidate_name, status, reschedule_count, resume_path, created_at, updated_at
-			 FROM applications ORDER BY updated_at DESC LIMIT ?`, limit)
+		q += ` AND status=?`
+		args = append(args, status)
 	}
+	if errorKind != "" {
+		q += ` AND error_kind=?`
+		args = append(args, errorKind)
+	}
+	q += ` ORDER BY updated_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.DB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -155,16 +171,25 @@ func (s *Service) ListApplications(ctx context.Context, status string, limit int
 	var out []map[string]any
 	for rows.Next() {
 		var id, jd, email, name, st, resumePath string
+		var ek string
+		var humanCode, systemCode sql.NullString
 		var rc int
 		var created, updated time.Time
-		if err := rows.Scan(&id, &jd, &email, &name, &st, &rc, &resumePath, &created, &updated); err != nil {
+		if err := rows.Scan(&id, &jd, &email, &name, &st, &rc, &resumePath, &ek, &humanCode, &systemCode, &created, &updated); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{
+		item := map[string]any{
 			"id": id, "jd_id": jd, "candidate_email": email, "candidate_name": name,
 			"status": st, "reschedule_count": rc, "created_at": created, "updated_at": updated,
-			"has_resume": resumePath != "",
-		})
+			"has_resume": resumePath != "", "error_kind": ek,
+		}
+		if humanCode.Valid {
+			item["human_reason_code"] = humanCode.String
+		}
+		if systemCode.Valid {
+			item["system_error_code"] = systemCode.String
+		}
+		out = append(out, item)
 	}
 	return out, nil
 }

@@ -6,8 +6,10 @@ from langgraph.graph import END, START, StateGraph
 
 from hr_agent.agents.parse_heuristics import needs_human_after_parse
 from hr_agent.agents.parse_react import run_parse_correct
+from hr_agent.agents.parse_verify import verify_parse_profile
 from hr_agent.nodes.questions import generate_questions
 from hr_agent.nodes.screen import screen_candidate
+from hr_agent.nodes.screen_tier import classify_screen
 from hr_agent.state.models import CandidateProfile
 
 
@@ -23,28 +25,66 @@ class PipelineState(TypedDict, total=False):
     needs_human: bool
     rejected: bool
     error: str
+    human_reason_code: str
+    screen_tier: str
+    parse_verify_detail: dict
 
 
 def node_parse(state: PipelineState) -> dict:
     raw, profile = run_parse_correct(state.get("resume_path", ""), state.get("resume_text", ""))
     needs_human, reason = needs_human_after_parse(raw, profile)
-    return {
+    out: dict = {
         "raw_text": raw,
         "profile": profile.model_dump(),
         "needs_human": needs_human,
         "rejected": False,
         "error": reason if needs_human else "",
+        "human_reason_code": "parse_low_confidence" if needs_human else "",
+    }
+    return out
+
+
+def node_verify(state: PipelineState) -> dict:
+    if state.get("needs_human"):
+        return {}
+    raw = state.get("raw_text", "")
+    profile = CandidateProfile.model_validate(state.get("profile") or {})
+    needs_human, code, detail = verify_parse_profile(raw, profile)
+    if not needs_human:
+        return {"parse_verify_detail": detail}
+    msg = "解析双路校验不一致，需人工复核" if code == "parse_cross_vendor_mismatch" else "解析校验未通过，需人工复核"
+    return {
+        "needs_human": True,
+        "error": msg,
+        "human_reason_code": code or "parse_inconsistent",
+        "parse_verify_detail": detail,
     }
 
 
 def node_screen(state: PipelineState) -> dict:
     profile = CandidateProfile.model_validate(state["profile"])
     screen = screen_candidate(profile, state.get("jd") or {})
-    rejected = bool(screen.hard_fail_reasons) or screen.weighted_total < 50
-    return {"screen": screen.model_dump(), "rejected": rejected}
+    tier, needs_human, rejected, code = classify_screen(screen)
+    out: dict = {
+        "screen": screen.model_dump(),
+        "screen_tier": tier,
+        "rejected": rejected,
+    }
+    if needs_human:
+        out["needs_human"] = True
+        out["human_reason_code"] = code or "screen_gray_zone"
+        if not out.get("error"):
+            out["error"] = "筛选灰区，需 HR 人工判定"
+    return out
 
 
 def route_after_parse(state: PipelineState) -> str:
+    if state.get("needs_human"):
+        return "end_early"
+    return "verify"
+
+
+def route_after_verify(state: PipelineState) -> str:
     if state.get("needs_human"):
         return "end_early"
     return "screen"
@@ -53,10 +93,12 @@ def route_after_parse(state: PipelineState) -> str:
 def build_parse_screen_graph():
     g = StateGraph(PipelineState)
     g.add_node("parse", node_parse)
+    g.add_node("verify", node_verify)
     g.add_node("screen", node_screen)
     g.add_node("end_early", lambda s: {})
     g.add_edge(START, "parse")
-    g.add_conditional_edges("parse", route_after_parse, {"screen": "screen", "end_early": "end_early"})
+    g.add_conditional_edges("parse", route_after_parse, {"verify": "verify", "end_early": "end_early"})
+    g.add_conditional_edges("verify", route_after_verify, {"screen": "screen", "end_early": "end_early"})
     g.add_edge("screen", END)
     g.add_edge("end_early", END)
     return g.compile()
@@ -81,6 +123,8 @@ def run_parse_screen(
             "rejected": False,
             "questions": [],
             "error": "",
+            "human_reason_code": "",
+            "screen_tier": "",
         }
     )
     needs_human = bool(result.get("needs_human"))
@@ -91,6 +135,9 @@ def run_parse_screen(
         "needs_human": needs_human,
         "rejected": False if needs_human else bool(result.get("rejected")),
         "error": result.get("error") or "",
+        "human_reason_code": result.get("human_reason_code") or "",
+        "screen_tier": result.get("screen_tier") or "",
+        "parse_verify_detail": result.get("parse_verify_detail") or {},
     }
 
 
@@ -114,5 +161,4 @@ def run_parse_screen_questions(
     jd: dict[str, Any],
     resume_text: str = "",
 ) -> dict[str, Any]:
-    """Legacy alias: questions are generated after interview confirm."""
     return run_parse_screen(application_id, resume_path, jd, resume_text)

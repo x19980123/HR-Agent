@@ -14,6 +14,7 @@ import (
 	"github.com/hr-agent/services/internal/db"
 	"github.com/hr-agent/services/internal/mail"
 	"github.com/hr-agent/services/internal/pipeline"
+	"github.com/hr-agent/services/web"
 )
 
 func main() {
@@ -51,10 +52,13 @@ func main() {
 	if err := svc.BootstrapSeedAdmin(context.Background()); err != nil {
 		log.Printf("staff bootstrap: %v", err)
 	} else {
-		log.Printf("staff bootstrap: seed admin ready")
+		log.Printf("staff bootstrap: interviewer pool synced")
 	}
 
 	srv := api.NewServer(svc, cfg, cfg.UploadDir)
+	if _, src := web.AdminIndexHTML(); src != "" {
+		log.Printf("admin UI source: %s", src)
+	}
 	log.Printf("go api listening on %s (admin=/admin candidate=/r/{token})", cfg.HTTPAddr)
 	if err := http.ListenAndServe(cfg.HTTPAddr, srv.Routes()); err != nil {
 		log.Fatal(err)

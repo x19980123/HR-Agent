@@ -14,27 +14,21 @@ import (
 const systemAppID = "system"
 
 type StaffInput struct {
-	OpenID        string `json:"open_id"`
-	Name          string `json:"name"`
-	Email         string `json:"email"`
-	IsHR          *bool  `json:"is_hr"`
-	IsInterviewer *bool  `json:"is_interviewer"`
-	Enabled       *bool  `json:"enabled"`
+	OpenID                string `json:"open_id"`
+	Name                  string `json:"name"`
+	Email                 string `json:"email"`
+	IsHR                  *bool  `json:"is_hr"`
+	IsInterviewer         *bool  `json:"is_interviewer"`
+	IsAdmin               *bool  `json:"is_admin"`
+	CanManageQuestionBank *bool  `json:"can_manage_question_bank"`
+	Enabled               *bool  `json:"enabled"`
 }
 
-func (s *Service) SeedAdminOpenID() string {
-	return strings.TrimSpace(s.Cfg.FeishuInterviewerUserID)
+func (s *Service) BootstrapSeedAdmin(ctx context.Context) error {
+	return s.RefreshInterviewerPool(ctx)
 }
 
-func (s *Service) isSeedAdmin(openID string) bool {
-	seed := s.SeedAdminOpenID()
-	return seed != "" && strings.TrimSpace(openID) == seed
-}
-
-// IsSystemAdmin: only FEISHU_INTERVIEWER_USER_ID may manage staff (sole admin).
-// Dev HR_API_TOKEN is treated as admin for local ops.
 func (s *Service) IsSystemAdmin(ctx context.Context, openID string) bool {
-	_ = ctx
 	openID = strings.TrimSpace(openID)
 	if openID == "" {
 		return false
@@ -42,39 +36,41 @@ func (s *Service) IsSystemAdmin(ctx context.Context, openID string) bool {
 	if openID == "api_token" {
 		return true
 	}
-	return s.isSeedAdmin(openID)
+	var v int
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT is_admin FROM staff_members WHERE open_id=? AND enabled=1`, openID,
+	).Scan(&v)
+	return err == nil && v == 1
 }
 
-// BootstrapSeedAdmin upserts FEISHU_INTERVIEWER_* as the sole system admin.
-func (s *Service) BootstrapSeedAdmin(ctx context.Context) error {
-	openID := s.SeedAdminOpenID()
+// IsQuestionBankAdmin: system admin or staff flag can_manage_question_bank.
+func (s *Service) IsQuestionBankAdmin(ctx context.Context, openID string) bool {
+	if s.IsSystemAdmin(ctx, openID) {
+		return true
+	}
+	openID = strings.TrimSpace(openID)
 	if openID == "" {
-		_ = s.RefreshInterviewerPool(ctx)
-		return nil
+		return false
 	}
-	name := strings.TrimSpace(s.Cfg.FeishuInterviewerName)
-	if name == "" {
-		name = "管理员"
-	}
-	_, err := s.DB.ExecContext(ctx,
-		`INSERT INTO staff_members (open_id, name, email, is_hr, is_interviewer, is_admin, enabled)
-		 VALUES (?, ?, '', 1, 1, 1, 1)
-		 ON DUPLICATE KEY UPDATE
-		   name=IF(VALUES(name)<>'', VALUES(name), name),
-		   is_hr=1, is_interviewer=1, is_admin=1, enabled=1`,
-		openID, name,
-	)
-	if err != nil {
-		return err
-	}
-	// Ensure only seed is admin
-	_, _ = s.DB.ExecContext(ctx, `UPDATE staff_members SET is_admin=0 WHERE open_id<>?`, openID)
-	return s.RefreshInterviewerPool(ctx)
+	var v int
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT can_manage_question_bank FROM staff_members WHERE open_id=? AND enabled=1`, openID,
+	).Scan(&v)
+	return err == nil && v == 1
+}
+
+func (s *Service) countEnabledAdmins(ctx context.Context, excludeOpenID string) (int, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM staff_members WHERE enabled=1 AND is_admin=1 AND open_id<>?`,
+		excludeOpenID,
+	).Scan(&n)
+	return n, err
 }
 
 func (s *Service) ListStaff(ctx context.Context) ([]map[string]any, error) {
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT open_id, COALESCE(name,''), COALESCE(email,''), is_hr, is_interviewer, is_admin, enabled, created_at, updated_at
+		`SELECT open_id, COALESCE(name,''), COALESCE(email,''), is_hr, is_interviewer, is_admin, can_manage_question_bank, enabled, created_at, updated_at
 		 FROM staff_members ORDER BY is_admin DESC, is_hr DESC, is_interviewer DESC, updated_at DESC`)
 	if err != nil {
 		return nil, err
@@ -93,21 +89,22 @@ func (s *Service) ListStaff(ctx context.Context) ([]map[string]any, error) {
 
 func (s *Service) GetStaff(ctx context.Context, openID string) (map[string]any, error) {
 	row := s.DB.QueryRowContext(ctx,
-		`SELECT open_id, COALESCE(name,''), COALESCE(email,''), is_hr, is_interviewer, is_admin, enabled, created_at, updated_at
+		`SELECT open_id, COALESCE(name,''), COALESCE(email,''), is_hr, is_interviewer, is_admin, can_manage_question_bank, enabled, created_at, updated_at
 		 FROM staff_members WHERE open_id=?`, openID)
 	return scanStaff(row)
 }
 
 func scanStaff(row scannable) (map[string]any, error) {
 	var openID, name, email string
-	var isHR, isInterviewer, isAdmin, enabled bool
+	var isHR, isInterviewer, isAdmin, canQBank, enabled bool
 	var created, updated time.Time
-	if err := row.Scan(&openID, &name, &email, &isHR, &isInterviewer, &isAdmin, &enabled, &created, &updated); err != nil {
+	if err := row.Scan(&openID, &name, &email, &isHR, &isInterviewer, &isAdmin, &canQBank, &enabled, &created, &updated); err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"open_id": openID, "name": name, "email": email,
-		"is_hr": isHR, "is_interviewer": isInterviewer, "is_admin": isAdmin, "enabled": enabled,
+		"is_hr": isHR, "is_interviewer": isInterviewer, "is_admin": isAdmin,
+		"can_manage_question_bank": canQBank, "enabled": enabled,
 		"created_at": created, "updated_at": updated,
 	}, nil
 }
@@ -133,12 +130,16 @@ func (s *Service) UpsertStaff(ctx context.Context, in StaffInput, actor string) 
 	}
 
 	isHR := true
-	isInterviewer := true
+	isInterviewer := false
+	canQBank := false
 	enabled := true
+	isAdmin := false
 	if !created {
 		isHR = existing["is_hr"].(bool)
 		isInterviewer = existing["is_interviewer"].(bool)
+		canQBank = existing["can_manage_question_bank"].(bool)
 		enabled = existing["enabled"].(bool)
+		isAdmin = existing["is_admin"].(bool)
 	}
 	if in.IsHR != nil {
 		isHR = *in.IsHR
@@ -146,22 +147,36 @@ func (s *Service) UpsertStaff(ctx context.Context, in StaffInput, actor string) 
 	if in.IsInterviewer != nil {
 		isInterviewer = *in.IsInterviewer
 	}
+	if in.CanManageQuestionBank != nil {
+		canQBank = *in.CanManageQuestionBank
+	}
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-
-	// Sole system admin cannot be demoted / disabled via member UI
-	isAdmin := s.isSeedAdmin(openID)
-	if isAdmin {
-		isHR = true
-		enabled = true
-		isInterviewer = true
-	} else if !created {
-		isAdmin = false
+	actor = strings.TrimSpace(actor)
+	if in.IsAdmin != nil {
+		if !s.IsSystemAdmin(ctx, actor) {
+			return nil, fmt.Errorf("仅系统管理员可变更 is_admin")
+		}
+		wantAdmin := *in.IsAdmin
+		if isAdmin && !wantAdmin {
+			n, err := s.countEnabledAdmins(ctx, openID)
+			if err != nil {
+				return nil, err
+			}
+			if n == 0 {
+				return nil, fmt.Errorf("不能取消最后一个系统管理员")
+			}
+		}
+		isAdmin = wantAdmin
 	}
 
-	if !isHR && !isInterviewer {
-		return nil, fmt.Errorf("至少选择 HR 或面试官之一")
+	if !isHR && !isAdmin {
+		return nil, fmt.Errorf("成员须为 HR 或系统管理员（面试官在 JD 面试计划中配置）")
+	}
+
+	if isAdmin {
+		canQBank = true
 	}
 
 	if (!enabled || !isHR) && !created {
@@ -189,12 +204,12 @@ func (s *Service) UpsertStaff(ctx context.Context, in StaffInput, actor string) 
 	}
 
 	_, err = s.DB.ExecContext(ctx,
-		`INSERT INTO staff_members (open_id, name, email, is_hr, is_interviewer, is_admin, enabled)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO staff_members (open_id, name, email, is_hr, is_interviewer, is_admin, can_manage_question_bank, enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE name=VALUES(name), email=VALUES(email),
 		   is_hr=VALUES(is_hr), is_interviewer=VALUES(is_interviewer),
-		   is_admin=VALUES(is_admin), enabled=VALUES(enabled)`,
-		openID, name, email, isHR, isInterviewer, isAdmin, enabled,
+		   is_admin=VALUES(is_admin), can_manage_question_bank=VALUES(can_manage_question_bank), enabled=VALUES(enabled)`,
+		openID, name, email, isHR, isInterviewer, isAdmin, canQBank, enabled,
 	)
 	if err != nil {
 		return nil, err
@@ -215,7 +230,8 @@ func (s *Service) UpsertStaff(ctx context.Context, in StaffInput, actor string) 
 		Actor:         actorOrSystem(actor),
 		Detail: map[string]any{
 			"open_id": openID, "name": name, "email": email,
-			"is_hr": isHR, "is_interviewer": isInterviewer, "is_admin": isAdmin, "enabled": enabled,
+			"is_hr": isHR, "is_interviewer": isInterviewer, "is_admin": isAdmin,
+			"can_manage_question_bank": canQBank, "enabled": enabled,
 		},
 	})
 
@@ -227,14 +243,20 @@ func (s *Service) UpsertStaff(ctx context.Context, in StaffInput, actor string) 
 
 func (s *Service) SetStaffEnabled(ctx context.Context, openID string, enabled bool, actor string) (map[string]any, error) {
 	openID = strings.TrimSpace(openID)
-	if s.isSeedAdmin(openID) && !enabled {
-		return nil, fmt.Errorf("不能停用系统管理员")
-	}
 	existing, err := s.GetStaff(ctx, openID)
 	if err != nil {
 		return nil, err
 	}
 	if !enabled {
+		if existing["is_admin"].(bool) {
+			n, err := s.countEnabledAdmins(ctx, openID)
+			if err != nil {
+				return nil, err
+			}
+			if n == 0 {
+				return nil, fmt.Errorf("不能停用最后一个系统管理员")
+			}
+		}
 		wasHR := existing["is_hr"].(bool) && existing["enabled"].(bool)
 		if wasHR {
 			n, err := s.countEnabledHR(ctx, openID)
@@ -332,9 +354,6 @@ func (s *Service) ListInterviewerIDs(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		ids = append(ids, id)
-	}
-	if len(ids) == 0 && s.Cfg.FeishuInterviewerUserID != "" {
-		ids = []string{s.Cfg.FeishuInterviewerUserID}
 	}
 	return ids, nil
 }

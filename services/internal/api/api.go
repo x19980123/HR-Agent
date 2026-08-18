@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hr-agent/services/internal/config"
 	"github.com/hr-agent/services/internal/feishuauth"
+	"github.com/hr-agent/services/internal/feishucontact"
 	"github.com/hr-agent/services/internal/pipeline"
 	"github.com/hr-agent/services/internal/ratelimit"
 	"github.com/hr-agent/services/internal/replytoken"
@@ -21,20 +23,22 @@ import (
 )
 
 type Server struct {
-	Pipeline   *pipeline.Service
-	Cfg        *config.Config
-	UploadDir  string
-	publicRL   *ratelimit.Limiter
-	FeishuAuth *feishuauth.Client
+	Pipeline      *pipeline.Service
+	Cfg           *config.Config
+	UploadDir     string
+	publicRL      *ratelimit.Limiter
+	FeishuAuth    *feishuauth.Client
+	FeishuContact *feishucontact.Client
 }
 
 func NewServer(p *pipeline.Service, cfg *config.Config, uploadDir string) *Server {
 	return &Server{
-		Pipeline:   p,
-		Cfg:        cfg,
-		UploadDir:  uploadDir,
-		publicRL:   ratelimit.New(time.Minute, 40),
-		FeishuAuth: feishuauth.New(cfg.FeishuAppID, cfg.FeishuAppSecret, cfg.FeishuOAuthRedirect),
+		Pipeline:      p,
+		Cfg:           cfg,
+		UploadDir:     uploadDir,
+		publicRL:      ratelimit.New(time.Minute, 40),
+		FeishuAuth:    feishuauth.New(cfg.FeishuAppID, cfg.FeishuAppSecret, cfg.FeishuOAuthRedirect),
+		FeishuContact: feishucontact.New(cfg.FeishuAppID, cfg.FeishuAppSecret),
 	}
 }
 
@@ -55,6 +59,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /v1/applications/{id}/replies", s.requireHROrInternal(http.HandlerFunc(s.handleReply)))
 	mux.Handle("POST /v1/applications/{id}/human/approve", s.requireHR(http.HandlerFunc(s.humanApprove)))
 	mux.Handle("POST /v1/internal/sweep-timeouts", s.requireInternal(http.HandlerFunc(s.sweepTimeouts)))
+	mux.Handle("POST /v1/hooks/channel-applications", s.requireInternal(http.HandlerFunc(s.hookChannelApplication)))
 
 	// Public candidate reply API
 	mux.HandleFunc("GET /v1/public/reply/{token}", s.publicGet)
@@ -66,6 +71,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /v1/admin/jds/{id}", s.requireHR(http.HandlerFunc(s.adminGetJD)))
 	mux.Handle("POST /v1/admin/jds", s.requireHR(http.HandlerFunc(s.adminUpsertJD)))
 	mux.Handle("PUT /v1/admin/jds/{id}", s.requireHR(http.HandlerFunc(s.adminUpdateJD)))
+	mux.Handle("PUT /v1/admin/jds/{id}/interview-plan", s.requireHR(http.HandlerFunc(s.adminPutInterviewPlan)))
 	mux.Handle("DELETE /v1/admin/jds/{id}", s.requireHR(http.HandlerFunc(s.adminDeleteJD)))
 	mux.Handle("GET /v1/admin/applications", s.requireHR(http.HandlerFunc(s.adminListApps)))
 	mux.Handle("GET /v1/admin/applications/{id}", s.requireHR(http.HandlerFunc(s.adminGetApp)))
@@ -74,13 +80,33 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /v1/admin/applications/{id}/human/approve", s.requireHR(http.HandlerFunc(s.humanApprove)))
 	mux.Handle("POST /v1/admin/applications/{id}/retry-parse", s.requireHR(http.HandlerFunc(s.retryParse)))
 	mux.Handle("GET /v1/admin/applications/{id}/reply-token", s.requireHR(http.HandlerFunc(s.adminReplyToken)))
+	mux.Handle("POST /v1/admin/applications/{id}/rounds/{index}/advance", s.requireHR(http.HandlerFunc(s.adminAdvanceRound)))
+	mux.Handle("POST /v1/admin/applications/{id}/manual-schedule", s.requireHR(http.HandlerFunc(s.adminManualSchedule)))
+	mux.Handle("POST /v1/admin/applications/{id}/offer", s.requireHR(http.HandlerFunc(s.adminUpdateOffer)))
+
+	mux.Handle("GET /v1/admin/interviewers", s.requireHR(http.HandlerFunc(s.adminListInterviewers)))
+	mux.Handle("PUT /v1/admin/interviewers/{open_id}", s.requireHR(http.HandlerFunc(s.adminUpsertInterviewer)))
+	mux.Handle("POST /v1/admin/interviewers/{open_id}/enable", s.requireHR(http.HandlerFunc(s.adminEnableInterviewer)))
+	mux.Handle("POST /v1/admin/interviewers/{open_id}/disable", s.requireHR(http.HandlerFunc(s.adminDisableInterviewer)))
+	mux.Handle("GET /v1/admin/interviewer-pools", s.requireHR(http.HandlerFunc(s.adminListInterviewerPools)))
+	mux.Handle("PUT /v1/admin/interviewer-pools", s.requireHR(http.HandlerFunc(s.adminUpsertInterviewerPool)))
+	mux.Handle("DELETE /v1/admin/interviewer-pools/{id}", s.requireHR(http.HandlerFunc(s.adminDeleteInterviewerPool)))
+	mux.Handle("GET /v1/admin/feishu/users", s.requireHR(http.HandlerFunc(s.adminSearchFeishuUsers)))
 
 	mux.Handle("GET /v1/admin/question-bank", s.requireHR(http.HandlerFunc(s.adminListQuestionBank)))
 	mux.Handle("GET /v1/admin/question-bank/{id}", s.requireHR(http.HandlerFunc(s.adminGetQuestionBank)))
-	mux.Handle("POST /v1/admin/question-bank", s.requireHR(http.HandlerFunc(s.adminUpsertQuestionBank)))
-	mux.Handle("PUT /v1/admin/question-bank/{id}", s.requireHR(http.HandlerFunc(s.adminUpdateQuestionBank)))
-	mux.Handle("DELETE /v1/admin/question-bank/{id}", s.requireHR(http.HandlerFunc(s.adminDeleteQuestionBank)))
-	mux.Handle("POST /v1/admin/question-bank/reindex", s.requireHR(http.HandlerFunc(s.adminReindexQuestionBank)))
+	mux.Handle("POST /v1/admin/question-bank", s.requireQuestionBankAdmin(http.HandlerFunc(s.adminUpsertQuestionBank)))
+	mux.Handle("PUT /v1/admin/question-bank/{id}", s.requireQuestionBankAdmin(http.HandlerFunc(s.adminUpdateQuestionBank)))
+	mux.Handle("DELETE /v1/admin/question-bank/{id}", s.requireQuestionBankAdmin(http.HandlerFunc(s.adminDeleteQuestionBank)))
+	mux.Handle("POST /v1/admin/question-bank/reindex", s.requireQuestionBankAdmin(http.HandlerFunc(s.adminReindexQuestionBank)))
+	mux.Handle("POST /v1/admin/question-bank/batch", s.requireQuestionBankAdmin(http.HandlerFunc(s.adminBatchQuestionBank)))
+
+	mux.Handle("POST /v1/admin/imports", s.requireHR(http.HandlerFunc(s.adminCreateImport)))
+	mux.Handle("GET /v1/admin/imports/{id}", s.requireHR(http.HandlerFunc(s.adminGetImport)))
+	mux.Handle("GET /v1/admin/imports/{id}/items", s.requireHR(http.HandlerFunc(s.adminListImportItems)))
+	mux.Handle("POST /v1/admin/imports/{id}/items/{item_id}/retry", s.requireHR(http.HandlerFunc(s.adminRetryImportItem)))
+
+	mux.Handle("PUT /v1/admin/applications/{id}/contact", s.requireHR(http.HandlerFunc(s.adminUpdateAppContact)))
 
 	mux.Handle("GET /v1/admin/staff/audit", s.requireAdmin(http.HandlerFunc(s.adminStaffAudit)))
 	mux.Handle("GET /v1/admin/staff", s.requireAdmin(http.HandlerFunc(s.adminListStaff)))
@@ -94,8 +120,9 @@ func (s *Server) Routes() http.Handler {
 
 	// Static pages
 	mux.HandleFunc("GET /r/{token}", s.serveCandidate)
+	mux.HandleFunc("GET /admin/assets/{path...}", s.serveAdminAsset)
 	mux.HandleFunc("GET /admin", s.serveAdmin)
-	mux.HandleFunc("GET /admin/", s.serveAdmin)
+	mux.HandleFunc("GET /admin/{rest...}", s.serveAdminSPA)
 	mux.HandleFunc("GET /", s.serveRoot)
 
 	return s.withSecurity(mux)
@@ -121,6 +148,21 @@ func (s *Server) requireHR(next http.Handler) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	})
+}
+
+func (s *Server) requireQuestionBankAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.checkHR(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		actor := s.currentActor(r)
+		if !s.Pipeline.IsQuestionBankAdmin(r.Context(), actor) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "仅题库管理员可修改题库"})
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -233,14 +275,51 @@ func (s *Server) serveCandidate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {
-	raw, err := web.FS.ReadFile("admin/index.html")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	raw, src := web.AdminIndexHTML()
+	if len(raw) == 0 {
+		http.Error(w, "admin index missing", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Admin-UI-Source", src)
 	_, _ = w.Write(raw)
+}
+
+func (s *Server) serveAdminAsset(w http.ResponseWriter, r *http.Request) {
+	rel := "assets/" + r.PathValue("path")
+	raw, _, ok := web.AdminVueAsset(rel)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if strings.HasSuffix(rel, ".js") {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	} else if strings.HasSuffix(rel, ".css") {
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(raw)
+}
+
+func (s *Server) serveAdminSPA(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.PathValue("rest"), "/")
+	if strings.HasPrefix(rest, "assets/") {
+		raw, _, ok := web.AdminVueAsset(rest)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.HasSuffix(rest, ".js") {
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		} else if strings.HasSuffix(rest, ".css") {
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		}
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(raw)
+		return
+	}
+	s.serveAdmin(w, r)
 }
 
 func (s *Server) publicGet(w http.ResponseWriter, r *http.Request) {
@@ -270,6 +349,7 @@ func (s *Server) publicPost(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Action    string `json:"action"`
 		SlotIndex *int   `json:"slot_index"`
+		Email     string `json:"email"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -279,7 +359,7 @@ func (s *Server) publicPost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action required"})
 		return
 	}
-	if err := s.Pipeline.HandlePublicAction(r.Context(), token, body.Action, body.SlotIndex); err != nil {
+	if err := s.Pipeline.HandlePublicAction(r.Context(), token, body.Action, body.SlotIndex, body.Email); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
@@ -323,6 +403,7 @@ func (s *Server) createApplication(w http.ResponseWriter, r *http.Request) {
 		}
 		id, err := s.Pipeline.Start(r.Context(), pipeline.StartInput{
 			JDID: jdID, CandidateEmail: email, CandidateName: name, ResumePath: path,
+			ContactSource: s.Pipeline.FormContactSourceForEmail(email),
 		})
 		if err != nil && id == "" {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -366,6 +447,7 @@ func (s *Server) createApplication(w http.ResponseWriter, r *http.Request) {
 	id, err := s.Pipeline.Start(r.Context(), pipeline.StartInput{
 		JDID: body.JDID, CandidateEmail: body.CandidateEmail,
 		CandidateName: body.CandidateName, ResumePath: path, ResumeText: body.ResumeText,
+		ContactSource: s.Pipeline.FormContactSourceForEmail(body.CandidateEmail),
 	})
 	if err != nil && id == "" {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -505,6 +587,172 @@ func (s *Server) adminUpdateJD(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
+func (s *Server) adminPutInterviewPlan(w http.ResponseWriter, r *http.Request) {
+	var in pipeline.InterviewPlanInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	jdID := r.PathValue("id")
+	if err := s.Pipeline.ReplaceJDRounds(r.Context(), jdID, in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	rounds, err := s.Pipeline.ListJDRounds(r.Context(), jdID)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rounds": rounds})
+}
+
+func (s *Server) adminAdvanceRound(w http.ResponseWriter, r *http.Request) {
+	var in pipeline.AdvanceRoundInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	idx, err := strconv.Atoi(r.PathValue("index"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid round index"})
+		return
+	}
+	if err := s.Pipeline.AdvanceRound(r.Context(), r.PathValue("id"), idx, in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	app, _ := s.Pipeline.GetApplication(r.Context(), r.PathValue("id"))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "application": app})
+}
+
+func (s *Server) adminManualSchedule(w http.ResponseWriter, r *http.Request) {
+	var in pipeline.ManualScheduleInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if err := s.Pipeline.ManualScheduleRound(r.Context(), r.PathValue("id"), in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	app, _ := s.Pipeline.GetApplication(r.Context(), r.PathValue("id"))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "application": app})
+}
+
+func (s *Server) adminUpdateOffer(w http.ResponseWriter, r *http.Request) {
+	var in pipeline.OfferUpdateInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if err := s.Pipeline.UpdateOfferStatus(r.Context(), r.PathValue("id"), in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	app, _ := s.Pipeline.GetApplicationDetail(r.Context(), r.PathValue("id"))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "application": app})
+}
+
+func (s *Server) adminListInterviewers(w http.ResponseWriter, r *http.Request) {
+	role := r.URL.Query().Get("role_kind")
+	dept := r.URL.Query().Get("department")
+	items, err := s.Pipeline.ListInterviewerProfiles(r.Context(), role, dept)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":      items,
+		"role_kinds": pipeline.InterviewerRoleKinds,
+	})
+}
+
+func (s *Server) adminUpsertInterviewer(w http.ResponseWriter, r *http.Request) {
+	var in pipeline.InterviewerProfileInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if strings.TrimSpace(in.OpenID) == "" {
+		in.OpenID = r.PathValue("open_id")
+	}
+	item, err := s.Pipeline.UpsertInterviewerProfile(r.Context(), in)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) adminEnableInterviewer(w http.ResponseWriter, r *http.Request) {
+	if err := s.Pipeline.SetInterviewerProfileEnabled(r.Context(), r.PathValue("open_id"), true); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) adminDisableInterviewer(w http.ResponseWriter, r *http.Request) {
+	if err := s.Pipeline.SetInterviewerProfileEnabled(r.Context(), r.PathValue("open_id"), false); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) adminListInterviewerPools(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Pipeline.ListInterviewerPools(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) adminUpsertInterviewerPool(w http.ResponseWriter, r *http.Request) {
+	var in pipeline.InterviewerPoolInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	item, err := s.Pipeline.UpsertInterviewerPool(r.Context(), in)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) adminDeleteInterviewerPool(w http.ResponseWriter, r *http.Request) {
+	if err := s.Pipeline.DeleteInterviewerPool(r.Context(), r.PathValue("id")); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) adminSearchFeishuUsers(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q required"})
+		return
+	}
+	if s.FeishuContact == nil || !s.FeishuContact.Enabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "飞书应用未配置"})
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := s.FeishuContact.SearchUsers(r.Context(), q, limit)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if items == nil {
+		items = []feishucontact.User{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) adminDeleteJD(w http.ResponseWriter, r *http.Request) {
@@ -699,12 +947,22 @@ func (s *Server) adminDownloadResume(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminListApps(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
-	items, err := s.Pipeline.ListApplications(r.Context(), status, 100)
+	errorKind := r.URL.Query().Get("error_kind")
+	items, err := s.Pipeline.ListApplications(r.Context(), status, errorKind, 100)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) adminGetImport(w http.ResponseWriter, r *http.Request) {
+	job, err := s.Pipeline.GetImportJob(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
 }
 
 func (s *Server) adminGetApp(w http.ResponseWriter, r *http.Request) {

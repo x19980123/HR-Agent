@@ -10,11 +10,12 @@ import (
 )
 
 type Slot struct {
-	ID        string    `json:"id"`
-	StartsAt  time.Time `json:"starts_at"`
-	EndsAt    time.Time `json:"ends_at"`
-	Location  string    `json:"location"`
-	EventID   string    `json:"event_id,omitempty"`
+	ID           string    `json:"id"`
+	StartsAt     time.Time `json:"starts_at"`
+	EndsAt       time.Time `json:"ends_at"`
+	Location     string    `json:"location"`
+	EventID      string    `json:"event_id,omitempty"`
+	AttendeeIDs  []string  `json:"attendee_ids,omitempty"` // per-slot Feishu open_ids for Hold/addAttendees
 }
 
 // BookResult is returned when a calendar event is created (after candidate confirm).
@@ -29,6 +30,8 @@ type Constraints struct {
 	After            time.Time `json:"after,omitempty"`
 	Duration         time.Duration
 	Limit            int
+	// AttendeeIDs: when set, freebusy / Hold use this list instead of the global interviewer pool.
+	AttendeeIDs []string `json:"attendee_ids,omitempty"`
 }
 
 // Provider abstracts Feishu/Google calendar.
@@ -37,6 +40,18 @@ type Provider interface {
 	Hold(ctx context.Context, slot Slot, applicationID string) (BookResult, error)
 	Confirm(ctx context.Context, eventID string) error
 	Release(ctx context.Context, eventID string) error
+}
+
+// BusyInterval is one busy block for a Feishu user (open_id).
+type BusyInterval struct {
+	OpenID    string    `json:"open_id"`
+	StartsAt  time.Time `json:"starts_at"`
+	EndsAt    time.Time `json:"ends_at"`
+}
+
+// BusyLister is optional; used by Scheduling Agent to score panel overlap.
+type BusyLister interface {
+	ListBusy(ctx context.Context, from, to time.Time, openIDs []string) ([]BusyInterval, error)
 }
 
 // StaffSyncer is implemented by FeishuProvider for multi-interviewer + ACL sync.
@@ -88,10 +103,11 @@ func (m *MemoryProvider) ListSlots(ctx context.Context, c Constraints) ([]Slot, 
 		key := t.Format(time.RFC3339)
 		if !m.busy[key] {
 			out = append(out, Slot{
-				ID:       uuid.NewString(),
-				StartsAt: t,
-				EndsAt:   t.Add(c.Duration),
-				Location: "线上会议",
+				ID:          uuid.NewString(),
+				StartsAt:    t,
+				EndsAt:      t.Add(c.Duration),
+				Location:    "线上会议",
+				AttendeeIDs: append([]string(nil), c.AttendeeIDs...),
 			})
 		}
 		// next candidate: +2h same day or next day 10:00
@@ -150,4 +166,13 @@ func (m *MemoryProvider) Release(ctx context.Context, eventID string) error {
 	delete(m.holds, eventID)
 	delete(m.busy, slot.StartsAt.Format(time.RFC3339))
 	return nil
+}
+
+// ListBusy returns no busy intervals (local/dev calendar).
+func (m *MemoryProvider) ListBusy(ctx context.Context, from, to time.Time, openIDs []string) ([]BusyInterval, error) {
+	_ = ctx
+	_ = from
+	_ = to
+	_ = openIDs
+	return nil, nil
 }

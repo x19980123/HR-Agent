@@ -36,17 +36,22 @@ type StartInput struct {
 	CandidateName  string
 	ResumePath     string
 	ResumeText     string
+	ContactSource  string
+	ExternalID     string
+	Channel        string
 }
 
 func (s *Service) Start(ctx context.Context, in StartInput) (string, error) {
 	appID := uuid.NewString()
 	threadID := appID
+	ch := nullStr(strings.TrimSpace(in.Channel))
+	ext := nullStr(strings.TrimSpace(in.ExternalID))
 
 	_, err := s.DB.ExecContext(ctx,
 		`INSERT INTO applications
-		 (id, jd_id, candidate_email, candidate_name, resume_path, status, thread_id, reschedule_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-		appID, in.JDID, in.CandidateEmail, in.CandidateName, in.ResumePath, db.StatusUploaded, threadID,
+		 (id, jd_id, channel, external_id, candidate_email, candidate_name, resume_path, status, thread_id, reschedule_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		appID, in.JDID, ch, ext, in.CandidateEmail, in.CandidateName, in.ResumePath, db.StatusUploaded, threadID,
 	)
 	if err != nil {
 		return "", err
@@ -57,19 +62,17 @@ func (s *Service) Start(ctx context.Context, in StartInput) (string, error) {
 		AfterStatus:   db.StatusUploaded,
 		Detail:        map[string]any{"jd_id": in.JDID, "email": in.CandidateEmail},
 	})
+	s.setContactOnCreate(ctx, appID, in.CandidateEmail, in.ContactSource, 0)
 
 	// Run parse/screen/invite asynchronously so the admin UI can poll live progress.
 	go func(appID string, in StartInput) {
 		bg := context.Background()
 		if err := s.runIntelligentAndSchedule(bg, appID, in); err != nil {
-			_, _ = s.DB.ExecContext(bg, `UPDATE applications SET status=?, error_message=? WHERE id=?`,
-				db.StatusFailed, err.Error(), appID)
-			_ = s.Audit.Log(bg, audit.Event{
-				ApplicationID: appID,
-				Action:        "pipeline_failed",
-				AfterStatus:   db.StatusFailed,
-				Detail:        map[string]any{"error": err.Error()},
-			})
+			code := "pipeline_error"
+			if isAgentUnavailable(err) {
+				code = "agent_unavailable"
+			}
+			_ = s.markSystemFailed(bg, appID, code, err.Error())
 		}
 	}(appID, in)
 
@@ -138,10 +141,18 @@ func (s *Service) runIntelligentAndSchedule(ctx context.Context, appID string, i
 		JD:            jd,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("agent parse_screen: %w", err)
 	}
 
-	_, _ = s.DB.ExecContext(ctx, `UPDATE applications SET status=? WHERE id=?`, db.StatusScreening, appID)
+	s.applyProfileContact(ctx, appID, resp.Profile)
+
+	var preservedHumanCode sql.NullString
+	var curStatus string
+	_ = s.DB.QueryRowContext(ctx, `SELECT status, human_reason_code FROM applications WHERE id=?`, appID).Scan(&curStatus, &preservedHumanCode)
+
+	if curStatus != db.StatusNeedsHuman {
+		_, _ = s.DB.ExecContext(ctx, `UPDATE applications SET status=? WHERE id=?`, db.StatusScreening, appID)
+	}
 	_ = s.Audit.Log(ctx, audit.Event{
 		ApplicationID: appID,
 		Action:        "screen_started",
@@ -152,35 +163,60 @@ func (s *Service) runIntelligentAndSchedule(ctx context.Context, appID string, i
 	screenJSON, _ := json.Marshal(resp.Screen)
 
 	// Parse failure / empty profile must not be treated as screen reject.
+	if curStatus == db.StatusNeedsHuman && preservedHumanCode.Valid && preservedHumanCode.String == "contact_csv_parse_mismatch" {
+		profileJSON, _ := json.Marshal(resp.Profile)
+		screenJSON, _ := json.Marshal(resp.Screen)
+		_, err = s.DB.ExecContext(ctx,
+			`UPDATE applications SET profile_json=?, screen_json=?, langsmith_run_id=? WHERE id=?`,
+			profileJSON, screenJSON, nullStr(resp.LangsmithRunID), appID)
+		return err
+	}
 	if resp.NeedsHuman {
 		reason := strings.TrimSpace(resp.Error)
 		if reason == "" {
-			reason = "解析结果不足，需人工处理"
+			reason = "解析/筛选需人工处理"
+		}
+		humanCode := strings.TrimSpace(resp.HumanReasonCode)
+		if humanCode == "" {
+			humanCode = "needs_human"
+		}
+		if preservedHumanCode.Valid && preservedHumanCode.String == "contact_csv_parse_mismatch" {
+			humanCode = preservedHumanCode.String
+			reason = "CSV 映射邮箱与解析结果不一致，请 HR 确认联系方式"
 		}
 		action := "needs_human_after_parse"
+		if strings.HasPrefix(humanCode, "screen_") {
+			action = "needs_human_after_screen"
+		}
 		_, err = s.DB.ExecContext(ctx,
-			`UPDATE applications SET status=?, profile_json=?, screen_json=?, langsmith_run_id=?, error_message=? WHERE id=?`,
-			db.StatusNeedsHuman, profileJSON, screenJSON, nullStr(resp.LangsmithRunID), reason, appID)
+			`UPDATE applications SET status=?, profile_json=?, screen_json=?, langsmith_run_id=?, error_message=?,
+			 error_kind=?, human_reason_code=?, system_error_code=NULL, screen_tier=? WHERE id=?`,
+			db.StatusNeedsHuman, profileJSON, screenJSON, nullStr(resp.LangsmithRunID), reason,
+			ErrorKindBusiness, humanCode, nullStr(resp.ScreenTier), appID)
 		_ = s.Audit.Log(ctx, audit.Event{
 			ApplicationID:  appID,
 			Action:         action,
 			AfterStatus:    db.StatusNeedsHuman,
 			LangsmithRunID: resp.LangsmithRunID,
-			Detail:         map[string]any{"reason": reason},
+			Detail:         map[string]any{"reason": reason, "human_reason_code": humanCode, "screen_tier": resp.ScreenTier},
 		})
 		return err
 	}
 	if resp.Rejected {
 		_, err = s.DB.ExecContext(ctx,
-			`UPDATE applications SET status=?, profile_json=?, screen_json=?, langsmith_run_id=?, error_message=NULL WHERE id=?`,
-			db.StatusRejected, profileJSON, screenJSON, nullStr(resp.LangsmithRunID), appID)
+			`UPDATE applications SET status=?, profile_json=?, screen_json=?, langsmith_run_id=?, error_message=NULL,
+			 error_kind=?, human_reason_code=NULL, system_error_code=NULL, screen_tier=? WHERE id=?`,
+			db.StatusRejected, profileJSON, screenJSON, nullStr(resp.LangsmithRunID),
+			ErrorKindBusiness, nullStr(resp.ScreenTier), appID)
 		_ = s.Audit.Log(ctx, audit.Event{ApplicationID: appID, Action: "rejected_by_screen", AfterStatus: db.StatusRejected, LangsmithRunID: resp.LangsmithRunID})
 		return err
 	}
 
 	_, err = s.DB.ExecContext(ctx,
-		`UPDATE applications SET status=?, profile_json=?, screen_json=?, langsmith_run_id=?, error_message=NULL WHERE id=?`,
-		db.StatusScreened, profileJSON, screenJSON, nullStr(resp.LangsmithRunID), appID)
+		`UPDATE applications SET status=?, profile_json=?, screen_json=?, langsmith_run_id=?, error_message=NULL,
+		 error_kind=?, human_reason_code=NULL, system_error_code=NULL, screen_tier=? WHERE id=?`,
+		db.StatusScreened, profileJSON, screenJSON, nullStr(resp.LangsmithRunID),
+		ErrorKindNone, nullStr(resp.ScreenTier), appID)
 	if err != nil {
 		return err
 	}
@@ -191,6 +227,9 @@ func (s *Service) runIntelligentAndSchedule(ctx context.Context, appID string, i
 		AfterStatus:   db.StatusScreened,
 	})
 
+	if err := s.contactGate(ctx, appID); err != nil {
+		return err
+	}
 	return s.scheduleAndNotify(ctx, appID, false, nil)
 }
 
@@ -221,10 +260,15 @@ func (s *Service) refreshProposedSlots(ctx context.Context, appID string, prefer
 	if err := s.releaseSoftSlots(ctx, appID); err != nil {
 		return err
 	}
+	attendees, duration, appRoundID, prepErr := s.prepareRoundScheduling(ctx, appID)
+	if prepErr != nil {
+		return s.markHumanWithCode(ctx, appID, prepErr.Error(), schedulingHumanCode(prepErr))
+	}
 	slots, err := s.Calendar.ListSlots(ctx, calendar.Constraints{
 		PreferredWindows: preferred,
 		Limit:            3,
-		Duration:         time.Hour,
+		Duration:         duration,
+		AttendeeIDs:      attendees,
 	})
 	if err != nil {
 		return err
@@ -234,9 +278,9 @@ func (s *Service) refreshProposedSlots(ctx context.Context, appID string, prefer
 	}
 	for _, sl := range slots {
 		_, _ = s.DB.ExecContext(ctx,
-			`INSERT INTO interview_slots (id, application_id, starts_at, ends_at, location, status, provider_event_id, is_proposed)
-			 VALUES (?, ?, ?, ?, ?, 'proposed', '', 1)`,
-			sl.ID, appID, sl.StartsAt, sl.EndsAt, sl.Location,
+			`INSERT INTO interview_slots (id, application_id, application_round_id, starts_at, ends_at, location, status, provider_event_id, is_proposed, source)
+			 VALUES (?, ?, ?, ?, ?, ?, 'proposed', '', 1, 'auto')`,
+			sl.ID, appID, nullStr(appRoundID), sl.StartsAt, sl.EndsAt, sl.Location,
 		)
 	}
 	newCount := rescheduleCount + 1
@@ -256,39 +300,96 @@ func (s *Service) refreshProposedSlots(ctx context.Context, appID string, prefer
 	return nil
 }
 
+// prepareRoundScheduling ensures current application round exists, resolves attendees
+// (Scheduling Agent when enabled, else Phase 2 classified_profiles).
+func (s *Service) prepareRoundScheduling(ctx context.Context, appID string) (attendees []string, duration time.Duration, appRoundID string, err error) {
+	var jdID string
+	var roundIndex int
+	if err = s.DB.QueryRowContext(ctx,
+		`SELECT jd_id, current_round_index FROM applications WHERE id=?`, appID,
+	).Scan(&jdID, &roundIndex); err != nil {
+		return nil, 0, "", err
+	}
+	n, err := s.CountJDRounds(ctx, jdID)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	if n == 0 {
+		return nil, 0, "", fmt.Errorf("interview_plan_missing: 请先在 JD 配置面试轮次与面试官")
+	}
+	appRoundID, jdRoundID, duration, err := s.EnsureApplicationRound(ctx, appID, jdID, roundIndex)
+	if err != nil {
+		return nil, 0, "", err
+	}
+
+	var detail map[string]any
+	if s.Cfg != nil && s.Cfg.SchedulingAgentEnabled {
+		attendees, detail, err = s.resolveAttendeesWithAgent(ctx, appID, jdRoundID, roundIndex, duration)
+	} else {
+		attendees, detail, err = s.ResolveAttendeesForRound(ctx, jdRoundID)
+	}
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	if err != nil {
+		detailJSON, _ := json.Marshal(detail)
+		_, _ = s.DB.ExecContext(ctx,
+			`UPDATE application_interview_rounds SET assignment_detail=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+			detailJSON, appRoundID,
+		)
+		return nil, 0, appRoundID, err
+	}
+	assignedJSON, _ := json.Marshal(attendees)
+	detailJSON, _ := json.Marshal(detail)
+	_, _ = s.DB.ExecContext(ctx,
+		`UPDATE application_interview_rounds SET assigned_open_ids=?, assignment_detail=?, status='pending', updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		assignedJSON, detailJSON, appRoundID,
+	)
+	return attendees, duration, appRoundID, nil
+}
+
 // scheduleAndNotify sends the first invite email only (no Feishu event yet).
 func (s *Service) scheduleAndNotify(ctx context.Context, appID string, isReschedule bool, preferred []string) error {
-	// Legacy callers may pass isReschedule=true; keep in-page refresh without email.
 	if isReschedule {
 		return s.refreshProposedSlots(ctx, appID, preferred)
 	}
+	if err := s.contactGate(ctx, appID); err != nil {
+		return err
+	}
 
 	var email, name, threadID string
+	var roundIndex int
 	err := s.DB.QueryRowContext(ctx,
-		`SELECT candidate_email, candidate_name, thread_id FROM applications WHERE id=?`, appID,
-	).Scan(&email, &name, &threadID)
+		`SELECT candidate_email, candidate_name, thread_id, current_round_index FROM applications WHERE id=?`, appID,
+	).Scan(&email, &name, &threadID, &roundIndex)
 	if err != nil {
 		return err
+	}
+
+	attendees, duration, appRoundID, prepErr := s.prepareRoundScheduling(ctx, appID)
+	if prepErr != nil {
+		return s.markHumanWithCode(ctx, appID, prepErr.Error(), schedulingHumanCode(prepErr))
 	}
 
 	slots, err := s.Calendar.ListSlots(ctx, calendar.Constraints{
 		PreferredWindows: preferred,
 		Limit:            1,
-		Duration:         time.Hour,
+		Duration:         duration,
+		AttendeeIDs:      attendees,
 	})
 	if err != nil {
 		return err
 	}
 	if len(slots) == 0 {
-		_, _ = s.DB.ExecContext(ctx, `UPDATE applications SET status=? WHERE id=?`, db.StatusNeedsHuman, appID)
-		return fmt.Errorf("no calendar slots available")
+		return s.markHumanWithCode(ctx, appID, "no calendar slots available", "no_calendar_slots")
 	}
 
 	sl := slots[0]
+	sl.AttendeeIDs = attendees
 	_, err = s.DB.ExecContext(ctx,
-		`INSERT INTO interview_slots (id, application_id, starts_at, ends_at, location, status, provider_event_id, is_proposed)
-		 VALUES (?, ?, ?, ?, ?, 'held', '', 0)`,
-		sl.ID, appID, sl.StartsAt, sl.EndsAt, sl.Location,
+		`INSERT INTO interview_slots (id, application_id, application_round_id, starts_at, ends_at, location, status, provider_event_id, is_proposed, source)
+		 VALUES (?, ?, ?, ?, ?, ?, 'held', '', 0, 'auto')`,
+		sl.ID, appID, appRoundID, sl.StartsAt, sl.EndsAt, sl.Location,
 	)
 	if err != nil {
 		return err
@@ -325,96 +426,49 @@ func (s *Service) scheduleAndNotify(ctx context.Context, appID string, isResched
 	if err != nil {
 		return err
 	}
+	_, _ = s.DB.ExecContext(ctx,
+		`UPDATE application_interview_rounds SET status='awaiting_reply', updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		appRoundID,
+	)
 	_ = s.Audit.Log(ctx, audit.Event{
 		ApplicationID:  appID,
 		Action:         "invite_enqueued",
 		AfterStatus:    db.StatusAwaitingReply,
 		IdempotencyKey: idem,
-		Detail:         map[string]any{"slots": len(proposed)},
+		Detail: map[string]any{
+			"slots": len(proposed), "round_index": roundIndex,
+			"attendee_open_ids": attendees, "application_round_id": appRoundID,
+		},
 	})
 	return nil
 }
 
+// HandleReply no longer runs classify Agent. Candidates should use /r/{token};
+// free-text email replies are escalated to HR for manual slot selection.
 func (s *Service) HandleReply(ctx context.Context, appID, emailBody string) error {
-	// serialize per application
-	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
 	var status string
-	var rescheduleCount int
-	var threadID string
-	err = tx.QueryRowContext(ctx,
-		`SELECT status, reschedule_count, thread_id FROM applications WHERE id=? FOR UPDATE`, appID,
-	).Scan(&status, &rescheduleCount, &threadID)
+	err := s.DB.QueryRowContext(ctx, `SELECT status FROM applications WHERE id=?`, appID).Scan(&status)
 	if err != nil {
 		return err
 	}
 	if status != db.StatusAwaitingReply {
 		return fmt.Errorf("application %s not awaiting reply (status=%s)", appID, status)
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	// load proposed slots for context
-	rows, err := s.DB.QueryContext(ctx,
-		`SELECT id, starts_at, ends_at, location FROM interview_slots
-		 WHERE application_id=? AND status IN ('held','proposed') ORDER BY starts_at`, appID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var slots []map[string]any
-	for rows.Next() {
-		var id, loc string
-		var start, end time.Time
-		_ = rows.Scan(&id, &start, &end, &loc)
-		slots = append(slots, map[string]any{
-			"id": id, "starts_at": start.Format(time.RFC3339), "ends_at": end.Format(time.RFC3339), "location": loc,
-		})
-	}
-
-	cls, err := s.Agent.Classify(ctx, agentclient.ClassifyRequest{
-		ApplicationID: appID,
-		EmailBody:     emailBody,
-		Context: map[string]any{
-			"proposed_slots":   slots,
-			"reschedule_count": rescheduleCount,
-		},
-	})
-	if err != nil {
-		return err
-	}
-
-	_, _ = s.DB.ExecContext(ctx, `UPDATE applications SET reply_intent=?, langsmith_run_id=COALESCE(?, langsmith_run_id) WHERE id=?`,
-		cls.Intent, nullStr(cls.LangsmithRunID), appID)
 	_ = s.Audit.Log(ctx, audit.Event{
-		ApplicationID:  appID,
-		Action:         "reply_classified",
-		LangsmithRunID: cls.LangsmithRunID,
-		Detail:         map[string]any{"intent": cls.Intent, "confidence": cls.Confidence, "body": emailBody},
+		ApplicationID: appID,
+		Action:        "email_reply_needs_human",
+		AfterStatus:   db.StatusNeedsHuman,
+		Detail:        map[string]any{"hint": "use_public_reply_link", "body_preview": truncateRunes(emailBody, 200)},
 	})
+	return s.markHumanWithCode(ctx, appID, "请使用邮件中的链接选择时段；或由 HR 在管理台手工排期", "email_reply_use_link")
+}
 
-	if cls.Confidence < 0.6 || cls.Intent == "unclear" {
-		return s.markHuman(ctx, appID, "low_confidence_or_unclear")
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
 	}
-
-	switch cls.Intent {
-	case "accept":
-		return s.confirm(ctx, appID, cls.SelectedSlotIndex)
-	case "decline":
-		return s.decline(ctx, appID)
-	case "reschedule":
-		if rescheduleCount >= s.Cfg.MaxReschedule {
-			return s.markHuman(ctx, appID, "reschedule_limit_exceeded")
-		}
-		return s.scheduleAndNotify(ctx, appID, true, cls.PreferredWindows)
-	default:
-		return s.markHuman(ctx, appID, "unknown_intent")
-	}
+	return string(r[:n]) + "…"
 }
 
 func (s *Service) confirm(ctx context.Context, appID string, selectedIdx *int) error {
@@ -446,14 +500,30 @@ func (s *Service) confirm(ctx context.Context, appID string, selectedIdx *int) e
 	}
 	chosen := list[idx]
 
+	idemKey := idempotency.Key(appID, "confirm", chosen.id)
+	acquired, idemErr := idempotency.Acquire(ctx, s.DB, idemKey, "confirm", appID)
+	if idemErr != nil {
+		return idemErr
+	}
+	if !acquired {
+		var st string
+		_ = s.DB.QueryRowContext(ctx, `SELECT status FROM applications WHERE id=?`, appID).Scan(&st)
+		if st == db.StatusConfirmed {
+			return nil
+		}
+		return fmt.Errorf("confirm already processed")
+	}
+
+	attendees := s.loadAssignedOpenIDs(ctx, appID)
 	book := calendar.BookResult{EventID: chosen.eid, Location: chosen.loc}
 	// Create Feishu/calendar event only after the candidate confirms.
 	if chosen.eid == "" {
 		res, holdErr := s.Calendar.Hold(ctx, calendar.Slot{
-			ID:       chosen.id,
-			StartsAt: chosen.start,
-			EndsAt:   chosen.end,
-			Location: chosen.loc,
+			ID:          chosen.id,
+			StartsAt:    chosen.start,
+			EndsAt:      chosen.end,
+			Location:    chosen.loc,
+			AttendeeIDs: attendees,
 		}, appID)
 		if holdErr != nil {
 			return fmt.Errorf("create calendar event on confirm: %w", holdErr)
@@ -475,12 +545,20 @@ func (s *Service) confirm(ctx context.Context, appID string, selectedIdx *int) e
 		_, _ = s.DB.ExecContext(ctx, `UPDATE interview_slots SET status=? WHERE id=?`, st, item.id)
 	}
 	_, err = s.DB.ExecContext(ctx, `UPDATE applications SET status=?, reply_intent=? WHERE id=?`, db.StatusConfirmed, "accept", appID)
+	var curRound int
+	_ = s.DB.QueryRowContext(ctx, `SELECT current_round_index FROM applications WHERE id=?`, appID).Scan(&curRound)
+	_, _ = s.DB.ExecContext(ctx,
+		`UPDATE application_interview_rounds SET status='confirmed', confirmed_slot_id=?, provider_event_id=?, updated_at=CURRENT_TIMESTAMP
+		 WHERE application_id=? AND round_index=?`,
+		chosen.id, chosen.eid, appID, curRound,
+	)
 	_ = s.Audit.Log(ctx, audit.Event{
 		ApplicationID: appID,
 		Action:        "interview_confirmed",
 		AfterStatus:   db.StatusConfirmed,
 		Detail: map[string]any{
 			"slot_id": chosen.id, "provider_event_id": chosen.eid, "meeting_url": book.MeetingURL,
+			"attendee_open_ids": attendees,
 		},
 	})
 	if err != nil {
@@ -580,21 +658,16 @@ func (s *Service) decline(ctx context.Context, appID string) error {
 }
 
 func (s *Service) markHuman(ctx context.Context, appID, reason string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE applications SET status=?, error_message=? WHERE id=?`,
-		db.StatusNeedsHuman, reason, appID)
-	_ = s.Audit.Log(ctx, audit.Event{
-		ApplicationID: appID,
-		Action:        "needs_human",
-		AfterStatus:   db.StatusNeedsHuman,
-		Detail:        map[string]any{"reason": reason},
-	})
-	return err
+	return s.markHumanWithCode(ctx, appID, reason, reason)
 }
 
 func (s *Service) HumanApprove(ctx context.Context, appID string) error {
-	var status string
-	if err := s.DB.QueryRowContext(ctx, `SELECT status FROM applications WHERE id=?`, appID).Scan(&status); err != nil {
+	var status, errorKind string
+	if err := s.DB.QueryRowContext(ctx, `SELECT status, COALESCE(error_kind,'none') FROM applications WHERE id=?`, appID).Scan(&status, &errorKind); err != nil {
 		return err
+	}
+	if errorKind == ErrorKindSystem {
+		return fmt.Errorf("系统故障需联系管理员处理，无法人工通过")
 	}
 	allowed := status == db.StatusNeedsHuman ||
 		status == db.StatusQuestionsReady ||
@@ -661,25 +734,86 @@ func (s *Service) SweepTimeouts(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
+func (s *Service) loadAssignedOpenIDs(ctx context.Context, appID string) []string {
+	var raw []byte
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT air.assigned_open_ids FROM application_interview_rounds air
+		 JOIN applications a ON a.id = air.application_id AND air.round_index = a.current_round_index
+		 WHERE a.id=?`, appID,
+	).Scan(&raw)
+	if err != nil || len(raw) == 0 {
+		return nil
+	}
+	var ids []string
+	_ = json.Unmarshal(raw, &ids)
+	return cleanOpenIDs(ids)
+}
+
 func (s *Service) GetApplication(ctx context.Context, appID string) (map[string]any, error) {
 	row := s.DB.QueryRowContext(ctx,
 		`SELECT id, jd_id, candidate_email, candidate_name, resume_path, status, thread_id, reschedule_count,
-		        profile_json, screen_json, questions_json, reply_intent, error_message, created_at, updated_at
+		        current_round_index,
+		        COALESCE(offer_status,'none'), COALESCE(offer_note,''), offer_updated_at, hired_at,
+		        profile_json, screen_json, questions_json, reply_intent, error_message,
+		        COALESCE(error_kind,'none'), human_reason_code, system_error_code, screen_tier,
+		        contact_email_source, contact_email_confidence, contact_resolved_at,
+		        created_at, updated_at
 		 FROM applications WHERE id=?`, appID)
 	var id, jd, email, name, resumePath, status, thread string
-	var rescheduleCount int
+	var rescheduleCount, currentRound int
+	var offerStatus, offerNote string
+	var offerUpdated, hiredAt sql.NullTime
 	var profile, screen, questions, intent, errmsg sql.NullString
+	var errorKind, humanCode, systemCode, screenTier sql.NullString
+	var contactSource sql.NullString
+	var contactConf sql.NullFloat64
+	var contactResolved sql.NullTime
 	var created, updated time.Time
 	if err := row.Scan(&id, &jd, &email, &name, &resumePath, &status, &thread, &rescheduleCount,
-		&profile, &screen, &questions, &intent, &errmsg, &created, &updated); err != nil {
+		&currentRound,
+		&offerStatus, &offerNote, &offerUpdated, &hiredAt,
+		&profile, &screen, &questions, &intent, &errmsg,
+		&errorKind, &humanCode, &systemCode, &screenTier,
+		&contactSource, &contactConf, &contactResolved,
+		&created, &updated); err != nil {
 		return nil, err
 	}
 	out := map[string]any{
 		"id": id, "jd_id": jd, "candidate_email": email, "candidate_name": name,
 		"status": status, "thread_id": thread, "reschedule_count": rescheduleCount,
+		"current_round_index": currentRound,
+		"offer_status": offerStatus, "offer_note": offerNote,
 		"created_at": created, "updated_at": updated,
 		"resume_path": resumePath, "resume_name": filepath.Base(resumePath),
 		"has_resume": resumePath != "",
+		"error_kind": errorKind.String,
+	}
+	if offerUpdated.Valid {
+		out["offer_updated_at"] = offerUpdated.Time
+	}
+	if hiredAt.Valid {
+		out["hired_at"] = hiredAt.Time
+	}
+	if rounds, rerr := s.ListApplicationRounds(ctx, appID); rerr == nil {
+		out["interview_rounds"] = rounds
+	}
+	if contactSource.Valid {
+		out["contact_email_source"] = contactSource.String
+	}
+	if contactConf.Valid {
+		out["contact_email_confidence"] = contactConf.Float64
+	}
+	if contactResolved.Valid {
+		out["contact_resolved_at"] = contactResolved.Time
+	}
+	if humanCode.Valid {
+		out["human_reason_code"] = humanCode.String
+	}
+	if systemCode.Valid {
+		out["system_error_code"] = systemCode.String
+	}
+	if screenTier.Valid {
+		out["screen_tier"] = screenTier.String
 	}
 	if profile.Valid {
 		out["profile"] = jsonRaw(profile.String)
@@ -697,6 +831,18 @@ func (s *Service) GetApplication(ctx context.Context, appID string) (map[string]
 		out["error_message"] = errmsg.String
 	}
 	return out, nil
+}
+
+func isAgentUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "agent") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "actively refused") ||
+		strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "health")
 }
 
 func (s *Service) loadJD(ctx context.Context, jdID string) (map[string]any, error) {
@@ -770,9 +916,6 @@ func (s *Service) enqueueConfirmEmail(ctx context.Context, appID string, start, 
 	} else {
 		b.WriteString(fmt.Sprintf("形式：线下面试\n地址/地点：%s\n请提前 10–15 分钟到达，并携带简历与身份证件。\n", loc))
 	}
-	if s.Cfg.FeishuInterviewerName != "" {
-		b.WriteString(fmt.Sprintf("面试官：%s\n", s.Cfg.FeishuInterviewerName))
-	}
 	b.WriteString(fmt.Sprintf("\n如需变更请尽快联系 HR。\n[thread:%s]\n", threadID))
 
 	idem := idempotency.Key(appID, "confirm", book.EventID)
@@ -797,9 +940,13 @@ func nullStr(s string) any {
 }
 
 func jsonRaw(s string) any {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
 	var v any
 	if err := json.Unmarshal([]byte(s), &v); err != nil {
-		return s
+		return nil
 	}
 	return v
 }

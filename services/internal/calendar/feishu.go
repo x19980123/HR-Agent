@@ -71,6 +71,7 @@ func (p *FeishuProvider) ListSlots(ctx context.Context, c Constraints) ([]Slot, 
 	if c.Limit <= 0 {
 		c.Limit = 3
 	}
+	attendees := cleanIDs(c.AttendeeIDs)
 	loc, err := time.LoadLocation(p.cfg.Timezone)
 	if err != nil {
 		loc = time.FixedZone("CST", 8*3600)
@@ -84,10 +85,14 @@ func (p *FeishuProvider) ListSlots(ctx context.Context, c Constraints) ([]Slot, 
 
 	// candidate window ~ 14 days
 	windowEnd := after.Add(14 * 24 * time.Hour)
-	busy, err := p.listBusy(ctx, after, windowEnd)
+	busy, err := p.listBusy(ctx, after, windowEnd, attendees)
 	if err != nil {
-		// freebusy optional; continue without if interviewer not configured
-		if len(p.interviewerIDs()) > 0 {
+		// freebusy optional; continue without if no attendees configured
+		ids := attendees
+		if len(ids) == 0 {
+			ids = p.interviewerIDs()
+		}
+		if len(ids) > 0 {
 			return nil, err
 		}
 		busy = nil
@@ -110,10 +115,11 @@ func (p *FeishuProvider) ListSlots(ctx context.Context, c Constraints) ([]Slot, 
 		}
 		if !overlapsBusy(t, end, busy) {
 			out = append(out, Slot{
-				ID:       uuid.NewString(),
-				StartsAt: t,
-				EndsAt:   end,
-				Location: p.cfg.Location,
+				ID:          uuid.NewString(),
+				StartsAt:    t,
+				EndsAt:      end,
+				Location:    p.cfg.Location,
+				AttendeeIDs: attendees,
 			})
 		}
 		next := t.Add(2 * time.Hour)
@@ -135,7 +141,14 @@ func (p *FeishuProvider) Hold(ctx context.Context, slot Slot, applicationID stri
 	if err != nil {
 		return BookResult{}, err
 	}
-	interviewer := p.cfg.InterviewerName
+	attendees := cleanIDs(slot.AttendeeIDs)
+	if len(attendees) == 0 {
+		attendees = p.interviewerIDs()
+	}
+	interviewer := strings.Join(attendees, ", ")
+	if interviewer == "" {
+		interviewer = p.cfg.InterviewerName
+	}
 	if interviewer == "" {
 		interviewer = p.cfg.InterviewerUserID
 	}
@@ -156,8 +169,9 @@ func (p *FeishuProvider) Hold(ctx context.Context, slot Slot, applicationID stri
 		return BookResult{}, err
 	}
 	// Best-effort: event is usable even if attendee add fails (check calendar ACL / open_id).
-	_ = p.addAttendees(ctx, calID, eventID)
+	_ = p.addAttendees(ctx, calID, eventID, attendees)
 	slot.EventID = eventID
+	slot.AttendeeIDs = attendees
 	p.mu.Lock()
 	p.holds[eventID] = slot
 	p.mu.Unlock()
@@ -184,7 +198,13 @@ func (p *FeishuProvider) Confirm(ctx context.Context, eventID string) error {
 			summary = fmt.Sprintf("面试 %s", slot.StartsAt.Format("01-02 15:04"))
 		}
 	}
-	_ = p.addAttendees(ctx, calID, eventID) // ensure interviewer is on the confirmed event
+	attendees := p.interviewerIDs()
+	if ok {
+		if ids := cleanIDs(slot.AttendeeIDs); len(ids) > 0 {
+			attendees = ids
+		}
+	}
+	_ = p.addAttendees(ctx, calID, eventID, attendees) // ensure interviewers on the confirmed event
 	return p.patchEvent(ctx, calID, eventID, map[string]any{
 		"summary": summary,
 		"description": fmt.Sprintf("候选人已确认面试安排（HR-Agent）\n面试官：%s\n地点：%s", interviewer, p.cfg.Location),
@@ -294,18 +314,25 @@ type busyRange struct {
 	End   time.Time
 }
 
+func cleanIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
 func (p *FeishuProvider) interviewerIDs() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.cfg.InterviewerIDs) > 0 {
-		out := make([]string, 0, len(p.cfg.InterviewerIDs))
-		for _, id := range p.cfg.InterviewerIDs {
-			id = strings.TrimSpace(id)
-			if id != "" {
-				out = append(out, id)
-			}
-		}
-		return out
+		return cleanIDs(p.cfg.InterviewerIDs)
 	}
 	if p.cfg.InterviewerUserID != "" {
 		return []string{p.cfg.InterviewerUserID}
@@ -316,21 +343,12 @@ func (p *FeishuProvider) interviewerIDs() []string {
 func (p *FeishuProvider) SetInterviewerUserIDs(ids []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	clean := make([]string, 0, len(ids))
-	seen := map[string]bool{}
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		clean = append(clean, id)
-	}
-	p.cfg.InterviewerIDs = clean
+	p.cfg.InterviewerIDs = cleanIDs(ids)
 }
 
-func (p *FeishuProvider) listBusy(ctx context.Context, from, to time.Time) ([]busyRange, error) {
-	ids := p.interviewerIDs()
+// ListBusy returns per-user busy intervals for Scheduling Agent scoring.
+func (p *FeishuProvider) ListBusy(ctx context.Context, from, to time.Time, openIDs []string) ([]BusyInterval, error) {
+	ids := cleanIDs(openIDs)
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -338,7 +356,7 @@ func (p *FeishuProvider) listBusy(ctx context.Context, from, to time.Time) ([]bu
 	if err != nil {
 		return nil, err
 	}
-	var out []busyRange
+	var out []BusyInterval
 	q := url.Values{}
 	q.Set("user_id_type", p.cfg.UserIDType)
 	path := feishuBase + "/calendar/v4/freebusy/list?" + q.Encode()
@@ -371,8 +389,24 @@ func (p *FeishuProvider) listBusy(ctx context.Context, from, to time.Time) ([]bu
 			if e1 != nil || e2 != nil {
 				continue
 			}
-			out = append(out, busyRange{Start: s, End: e})
+			out = append(out, BusyInterval{OpenID: uid, StartsAt: s, EndsAt: e})
 		}
+	}
+	return out, nil
+}
+
+func (p *FeishuProvider) listBusy(ctx context.Context, from, to time.Time, prefer []string) ([]busyRange, error) {
+	ids := cleanIDs(prefer)
+	if len(ids) == 0 {
+		ids = p.interviewerIDs()
+	}
+	intervals, err := p.ListBusy(ctx, from, to, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]busyRange, 0, len(intervals))
+	for _, iv := range intervals {
+		out = append(out, busyRange{Start: iv.StartsAt, End: iv.EndsAt})
 	}
 	return out, nil
 }
@@ -438,8 +472,11 @@ func (p *FeishuProvider) createEvent(ctx context.Context, calID, summary, desc s
 	return data.Event.EventID, data.Event.Vchat.MeetingURL, nil
 }
 
-func (p *FeishuProvider) addAttendees(ctx context.Context, calID, eventID string) error {
-	ids := p.interviewerIDs()
+func (p *FeishuProvider) addAttendees(ctx context.Context, calID, eventID string, prefer []string) error {
+	ids := cleanIDs(prefer)
+	if len(ids) == 0 {
+		ids = p.interviewerIDs()
+	}
 	if len(ids) == 0 || eventID == "" {
 		return nil
 	}

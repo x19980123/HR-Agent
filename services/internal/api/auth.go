@@ -27,24 +27,28 @@ func (s *Server) feishuLoginEnabled() bool {
 func (s *Server) authMe(w http.ResponseWriter, r *http.Request) {
 	if u, err := session.FromRequest(r, s.Cfg.SessionSecret); err == nil {
 		isAdmin := s.Pipeline.IsSystemAdmin(r.Context(), u.OpenID)
+		canQBank := s.Pipeline.IsQuestionBankAdmin(r.Context(), u.OpenID)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"auth":     "feishu",
-			"is_admin": isAdmin,
+			"auth":                     "feishu",
+			"is_admin":                 isAdmin,
+			"can_manage_question_bank": canQBank,
 			"user": map[string]any{
-				"open_id":  u.OpenID,
-				"name":     u.Name,
-				"email":    u.Email,
-				"avatar":   u.Avatar,
-				"is_admin": isAdmin,
+				"open_id":                  u.OpenID,
+				"name":                     u.Name,
+				"email":                    u.Email,
+				"avatar":                   u.Avatar,
+				"is_admin":                 isAdmin,
+				"can_manage_question_bank": canQBank,
 			},
 		})
 		return
 	}
 	if s.checkBearer(r, s.Cfg.HRAPIToken) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"auth":     "token",
-			"is_admin": true,
-			"user":     map[string]any{"name": "API Token", "is_admin": true},
+			"auth":                     "token",
+			"is_admin":                 true,
+			"can_manage_question_bank": true,
+			"user":                     map[string]any{"name": "API Token", "is_admin": true, "can_manage_question_bank": true},
 		})
 		return
 	}
@@ -196,15 +200,9 @@ func (s *Server) feishuUserAllowed(r *http.Request, info *feishuauth.UserInfo) b
 }
 
 func (s *Server) envFallbackAllowed(info *feishuauth.UserInfo, email string) bool {
-	seed := strings.TrimSpace(s.Cfg.FeishuInterviewerUserID)
-	if seed != "" && (info.OpenID == seed || info.UserID == seed || info.UnionID == seed) {
-		return true
-	}
 	allowIDs := s.Cfg.FeishuHRAllowOpenIDs
 	allowEmails := s.Cfg.FeishuHRAllowEmails
 	if len(allowIDs) == 0 && len(allowEmails) == 0 {
-		// When staff table is empty/unavailable, only seed interviewer may enter
-		// (safer than open-to-all). If no seed configured, deny.
 		return false
 	}
 	for _, id := range allowIDs {

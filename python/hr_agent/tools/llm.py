@@ -21,7 +21,15 @@ def _normalize_base(base: str) -> str:
 
 def endpoint_for_model(model_name: str) -> LLMEndpoint:
     """Map a model name back to its step endpoint (key/base may differ per step)."""
-    for ep in (settings.parse, settings.screen, settings.question, settings.classify):
+    for ep in (
+        settings.parse,
+        settings.screen,
+        settings.question,
+        settings.classify,
+        settings.parse_verify,
+        settings.scheduling,
+        settings.scheduling_verify,
+    ):
         if ep.model == model_name:
             return ep
     return LLMEndpoint(settings.llm_api_key, settings.llm_api_base, model_name or settings.llm_default_model)

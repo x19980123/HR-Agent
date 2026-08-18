@@ -48,6 +48,8 @@ type PipelineResponse struct {
 	Questions      []any          `json:"questions"`
 	NeedsHuman     bool           `json:"needs_human"`
 	Rejected       bool           `json:"rejected"`
+	HumanReasonCode string         `json:"human_reason_code,omitempty"`
+	ScreenTier      string         `json:"screen_tier,omitempty"`
 	LangsmithRunID string         `json:"langsmith_run_id,omitempty"`
 	Error          string         `json:"error,omitempty"`
 }
@@ -114,6 +116,57 @@ func (c *Client) Classify(ctx context.Context, req ClassifyRequest) (*ClassifyRe
 	}
 	if out.Error != "" {
 		return &out, fmt.Errorf("agent classify: %s", out.Error)
+	}
+	return &out, nil
+}
+
+type ExtractContactResponse struct {
+	Email      string  `json:"email"`
+	Name       string  `json:"name"`
+	Confidence float64 `json:"confidence"`
+	Candidates []string `json:"candidates,omitempty"`
+}
+
+func (c *Client) ExtractContact(ctx context.Context, resumePath, resumeText string) (*ExtractContactResponse, error) {
+	var out ExtractContactResponse
+	req := map[string]string{"resume_path": resumePath, "resume_text": resumeText}
+	if err := c.post(ctx, "/v1/extract-contact", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+type SchedulingAssignRequest struct {
+	ApplicationID string           `json:"application_id"`
+	RoundIndex    int              `json:"round_index"`
+	JDRoundID     string           `json:"jd_round_id,omitempty"`
+	JDDepartment  string           `json:"jd_department,omitempty"`
+	DurationMin   int              `json:"duration_minutes"`
+	Requirements  []map[string]any `json:"requirements"`
+	Candidates    []map[string]any `json:"candidates"`
+	BusyIntervals []map[string]any `json:"busy_intervals,omitempty"`
+	WindowStart   string           `json:"window_start,omitempty"`
+	WindowEnd     string           `json:"window_end,omitempty"`
+}
+
+type SchedulingAssignResponse struct {
+	AssignedOpenIDs []string         `json:"assigned_open_ids"`
+	ByRole          []map[string]any `json:"by_role,omitempty"`
+	Rationale       string           `json:"rationale,omitempty"`
+	NeedsHuman      bool             `json:"needs_human"`
+	HumanReasonCode string           `json:"human_reason_code,omitempty"`
+	Error           string           `json:"error,omitempty"`
+	VerifyDetail    map[string]any   `json:"verify_detail,omitempty"`
+	AssignmentDetail map[string]any  `json:"assignment_detail,omitempty"`
+}
+
+func (c *Client) AssignScheduling(ctx context.Context, req SchedulingAssignRequest) (*SchedulingAssignResponse, error) {
+	var out SchedulingAssignResponse
+	if err := c.post(ctx, "/v1/scheduling/assign", req, &out); err != nil {
+		return nil, err
+	}
+	if out.Error != "" && !out.NeedsHuman {
+		return &out, fmt.Errorf("agent scheduling/assign: %s", out.Error)
 	}
 	return &out, nil
 }
