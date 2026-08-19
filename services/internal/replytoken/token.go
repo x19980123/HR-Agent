@@ -11,24 +11,51 @@ import (
 	"time"
 )
 
+const (
+	PurposeCandidateReply  = "candidate_reply"
+	PurposeInterviewerPack = "interviewer_pack"
+)
+
 var (
 	ErrInvalid = errors.New("invalid reply token")
 	ErrExpired = errors.New("reply token expired")
 )
 
 type Claims struct {
-	AppID string `json:"app_id"`
-	Exp   int64  `json:"exp"`
+	AppID      string `json:"app_id"`
+	Exp        int64  `json:"exp"`
+	Purpose    string `json:"purpose,omitempty"`
+	OpenID     string `json:"open_id,omitempty"`
+	RoundIndex int    `json:"round_index,omitempty"`
 }
 
 func Issue(secret, appID string, ttl time.Duration) (string, error) {
+	return issueClaims(secret, Claims{AppID: appID, Exp: expUnix(ttl)}, ttl)
+}
+
+func IssueInterviewerPack(secret, appID, openID string, roundIndex int, ttl time.Duration) (string, error) {
+	if strings.TrimSpace(openID) == "" {
+		return "", fmt.Errorf("open_id required for interviewer pack token")
+	}
+	return issueClaims(secret, Claims{
+		AppID: appID, Exp: expUnix(ttl), Purpose: PurposeInterviewerPack,
+		OpenID: openID, RoundIndex: roundIndex,
+	}, ttl)
+}
+
+func issueClaims(secret string, c Claims, ttl time.Duration) (string, error) {
 	if secret == "" {
 		return "", fmt.Errorf("REPLY_TOKEN_SECRET is empty")
 	}
-	if ttl <= 0 {
-		ttl = 48 * time.Hour
+	if c.AppID == "" {
+		return "", fmt.Errorf("app_id required")
 	}
-	c := Claims{AppID: appID, Exp: time.Now().Add(ttl).Unix()}
+	if c.Exp == 0 {
+		if ttl <= 0 {
+			ttl = 48 * time.Hour
+		}
+		c.Exp = time.Now().Add(ttl).Unix()
+	}
 	payload, err := json.Marshal(c)
 	if err != nil {
 		return "", err
@@ -38,6 +65,13 @@ func Issue(secret, appID string, ttl time.Duration) (string, error) {
 	_, _ = mac.Write([]byte(p))
 	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	return p + "." + sig, nil
+}
+
+func expUnix(ttl time.Duration) int64 {
+	if ttl <= 0 {
+		ttl = 48 * time.Hour
+	}
+	return time.Now().Add(ttl).Unix()
 }
 
 func Verify(secret, token string) (Claims, error) {

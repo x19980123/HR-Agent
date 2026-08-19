@@ -73,6 +73,7 @@ class Handler(BaseHTTPRequestHandler):
                     application_id=req.get("application_id", ""),
                     profile=req.get("profile") or {},
                     jd=req.get("jd") or {},
+                    bank_hints=req.get("bank_hints") or None,
                 )
                 out["langsmith_run_id"] = ""
                 out["llm_backend"] = llm.llm_backend()

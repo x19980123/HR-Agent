@@ -64,6 +64,7 @@ func (s *Server) Routes() http.Handler {
 	// Public candidate reply API
 	mux.HandleFunc("GET /v1/public/reply/{token}", s.publicGet)
 	mux.HandleFunc("POST /v1/public/reply/{token}", s.publicPost)
+	mux.HandleFunc("GET /v1/public/interviewer/{token}", s.publicInterviewerGet)
 
 	// Admin API
 	mux.Handle("GET /v1/admin/stats", s.requireHR(http.HandlerFunc(s.adminStats)))
@@ -83,6 +84,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /v1/admin/applications/{id}/rounds/{index}/advance", s.requireHR(http.HandlerFunc(s.adminAdvanceRound)))
 	mux.Handle("POST /v1/admin/applications/{id}/manual-schedule", s.requireHR(http.HandlerFunc(s.adminManualSchedule)))
 	mux.Handle("POST /v1/admin/applications/{id}/offer", s.requireHR(http.HandlerFunc(s.adminUpdateOffer)))
+	mux.Handle("POST /v1/admin/applications/{id}/interviewer-pack/send", s.requireHR(http.HandlerFunc(s.adminSendInterviewerPack)))
 
 	mux.Handle("GET /v1/admin/interviewers", s.requireHR(http.HandlerFunc(s.adminListInterviewers)))
 	mux.Handle("PUT /v1/admin/interviewers/{open_id}", s.requireHR(http.HandlerFunc(s.adminUpsertInterviewer)))
@@ -120,6 +122,7 @@ func (s *Server) Routes() http.Handler {
 
 	// Static pages
 	mux.HandleFunc("GET /r/{token}", s.serveCandidate)
+	mux.HandleFunc("GET /i/{token}", s.serveInterviewer)
 	mux.HandleFunc("GET /admin/assets/{path...}", s.serveAdminAsset)
 	mux.HandleFunc("GET /admin", s.serveAdmin)
 	mux.HandleFunc("GET /admin/{rest...}", s.serveAdminSPA)
@@ -272,6 +275,47 @@ func (s *Server) serveCandidate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(raw)
+}
+
+func (s *Server) serveInterviewer(w http.ResponseWriter, r *http.Request) {
+	raw, err := web.FS.ReadFile("interviewer/index.html")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(raw)
+}
+
+func (s *Server) publicInterviewerGet(w http.ResponseWriter, r *http.Request) {
+	if !s.publicRL.Allow(s.clientIP(r)) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limited"})
+		return
+	}
+	token := r.PathValue("token")
+	view, err := s.Pipeline.PublicInterviewerPackView(r.Context(), token)
+	if err != nil {
+		code := http.StatusBadRequest
+		if err == replytoken.ErrExpired {
+			code = http.StatusGone
+		} else if err == replytoken.ErrInvalid {
+			code = http.StatusForbidden
+		}
+		writeJSON(w, code, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) adminSendInterviewerPack(w http.ResponseWriter, r *http.Request) {
+	appID := r.PathValue("id")
+	if err := s.Pipeline.DispatchInterviewerPackEmails(r.Context(), appID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	links, _ := s.Pipeline.BuildInterviewerPackLinks(r.Context(), appID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "interviewer_pack": links})
 }
 
 func (s *Server) serveAdmin(w http.ResponseWriter, r *http.Request) {

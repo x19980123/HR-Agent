@@ -16,18 +16,20 @@ import (
 	"github.com/hr-agent/services/internal/calendar"
 	"github.com/hr-agent/services/internal/config"
 	"github.com/hr-agent/services/internal/db"
+	"github.com/hr-agent/services/internal/feishucontact"
 	"github.com/hr-agent/services/internal/idempotency"
 	"github.com/hr-agent/services/internal/mail"
 	"github.com/hr-agent/services/internal/replytoken"
 )
 
 type Service struct {
-	DB       *sql.DB
-	Cfg      *config.Config
-	Agent    *agentclient.Client
-	Calendar calendar.Provider
-	Mail     mail.Sender
-	Audit    *audit.Logger
+	DB            *sql.DB
+	Cfg           *config.Config
+	Agent         *agentclient.Client
+	Calendar      calendar.Provider
+	Mail          mail.Sender
+	Audit         *audit.Logger
+	FeishuContact *feishucontact.Client
 }
 
 type StartInput struct {
@@ -607,10 +609,12 @@ func (s *Service) generateQuestionsAfterConfirm(ctx context.Context, appID strin
 	if err != nil {
 		return err
 	}
+	hints, _ := s.buildQuestionBankHints(ctx, profile, jd)
 	resp, err := s.Agent.GenerateQuestions(ctx, agentclient.QuestionsRequest{
 		ApplicationID: appID,
 		Profile:       profile,
 		JD:            jd,
+		BankHints:     hints,
 	})
 	if err != nil {
 		return err
@@ -635,6 +639,14 @@ func (s *Service) generateQuestionsAfterConfirm(ctx context.Context, appID strin
 		LangsmithRunID: resp.LangsmithRunID,
 		Detail:         map[string]any{"count": len(resp.Questions)},
 	})
+	if packErr := s.DispatchInterviewerPackEmails(ctx, appID); packErr != nil {
+		_ = s.Audit.Log(ctx, audit.Event{
+			ApplicationID: appID,
+			Action:        "interviewer_pack_email_failed",
+			AfterStatus:   db.StatusConfirmed,
+			Detail:        map[string]any{"error": packErr.Error()},
+		})
+	}
 	return nil
 }
 

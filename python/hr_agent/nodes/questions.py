@@ -22,6 +22,33 @@ except ImportError:  # pragma: no cover
         return None
 
 
+def _from_hints(bank_hints: list[dict[str, Any]]) -> list[InterviewQuestion]:
+    out: list[InterviewQuestion] = []
+    for h in bank_hints:
+        qtext = str(h.get("question") or h.get("content") or "").strip()
+        if not qtext:
+            continue
+        ref = str(h.get("reference_answer") or "").strip()
+        pts = h.get("scoring_points") or []
+        if not isinstance(pts, list):
+            pts = []
+        if not ref:
+            ref = "请结合候选人经历展开追问，并核对关键知识点。"
+        if not pts:
+            pts = ["概念正确", "能结合项目", "思路清晰"]
+        out.append(
+            InterviewQuestion(
+                category=str(h.get("category") or "fundamentals"),
+                difficulty=str(h.get("difficulty") or "medium"),
+                question=qtext,
+                reference_answer=ref,
+                scoring_points=[str(p) for p in pts if str(p).strip()],
+                estimated_minutes=15,
+            )
+        )
+    return out[:6]
+
+
 def _from_rag(profile: CandidateProfile, jd: dict[str, Any]) -> list[InterviewQuestion]:
     query = " ".join(
         [
@@ -38,12 +65,11 @@ def _from_rag(profile: CandidateProfile, jd: dict[str, Any]) -> list[InterviewQu
                 category=d.get("category", "fundamentals"),
                 difficulty="medium",
                 question=d["text"],
-                reference_answer="结合候选人背景展开追问，覆盖原理、取舍与落地经验。",
+                reference_answer="请结合候选人背景展开追问，覆盖原理、取舍与落地经验。",
                 scoring_points=["概念正确", "能结合项目", "思路清晰"],
                 estimated_minutes=15,
             )
         )
-    # ensure categories
     cats = {q.category for q in out}
     if "algorithm" not in cats:
         out.append(
@@ -58,10 +84,15 @@ def _from_rag(profile: CandidateProfile, jd: dict[str, Any]) -> list[InterviewQu
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=0.5, min=0.5, max=3))
-def generate_questions(profile: CandidateProfile, jd: dict[str, Any]) -> list[InterviewQuestion]:
-    seed = _from_rag(profile, jd)
+def generate_questions(
+    profile: CandidateProfile,
+    jd: dict[str, Any],
+    bank_hints: list[dict[str, Any]] | None = None,
+) -> list[InterviewQuestion]:
+    hints = bank_hints or []
+    seed = _from_hints(hints) if hints else _from_rag(profile, jd)
     if not llm.has_llm():
-        return seed
+        return _ensure_reference_answers(seed)
 
     from dataclasses import dataclass, field
 
@@ -75,14 +106,14 @@ def generate_questions(profile: CandidateProfile, jd: dict[str, Any]) -> list[In
 
     system = (
         "你是面试题辅助助手。基于 JD、候选人画像与题库线索，生成个性化面试题。"
-        "覆盖 algorithm / system_design / fundamentals；含参考答案与得分点。"
+        "覆盖 algorithm / system_design / fundamentals；每题必须含非空 reference_answer 与 scoring_points。"
         "输出 JSON：{\"questions\":[{\"category\":\"...\",\"difficulty\":\"medium\","
         "\"question\":\"...\",\"reference_answer\":\"...\",\"scoring_points\":[\"...\"],"
         "\"estimated_minutes\":15}]}"
     )
     user = (
         f"JD:\n{llm.dumps(jd)}\n\nProfile:\n{profile.model_dump_json()}\n\n"
-        f"题库线索:\n{llm.dumps({'items': [q.model_dump() for q in seed]})}"
+        f"题库线索（含参考答案，请个性化题干但保留得分点）:\n{llm.dumps({'items': [q.model_dump() for q in seed]})}"
     )
     try:
         bundle = llm.structured_invoke(settings.question_model, system, user, QuestionBundle)
@@ -101,9 +132,21 @@ def generate_questions(profile: CandidateProfile, jd: dict[str, Any]) -> list[In
                         estimated_minutes=int(item.get("estimated_minutes") or 15),
                     )
                 )
-        qs = [q for q in qs if q.question]
+        qs = [q for q in qs if q.question.strip()]
+        qs = _ensure_reference_answers(qs)
         if len(qs) < 3:
-            return seed
+            return _ensure_reference_answers(seed)
         return qs[:6]
     except Exception:
-        return seed
+        return _ensure_reference_answers(seed)
+
+
+def _ensure_reference_answers(qs: list[InterviewQuestion]) -> list[InterviewQuestion]:
+    out: list[InterviewQuestion] = []
+    for q in qs:
+        if not str(q.reference_answer or "").strip():
+            q.reference_answer = "请结合候选人经历与 JD 要求给出可操作的参考答案要点。"
+        if not q.scoring_points:
+            q.scoring_points = ["概念正确", "能结合项目", "思路清晰"]
+        out.append(q)
+    return out

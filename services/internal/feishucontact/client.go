@@ -427,6 +427,19 @@ func (c *Client) getUser(ctx context.Context, token, openID string) (User, error
 	}, nil
 }
 
+// GetUserByOpenID loads a tenant user profile by open_id (for interviewer email fallback).
+func (c *Client) GetUserByOpenID(ctx context.Context, openID string) (User, error) {
+	openID = strings.TrimSpace(openID)
+	if openID == "" {
+		return User{}, fmt.Errorf("open_id required")
+	}
+	token, err := c.accessToken(ctx)
+	if err != nil {
+		return User{}, err
+	}
+	return c.getUser(ctx, token, openID)
+}
+
 func (c *Client) getDepartmentName(ctx context.Context, token, deptID string) (string, error) {
 	path := fmt.Sprintf("%s/contact/v3/departments/%s?department_id_type=open_department_id",
 		feishuBase, url.PathEscape(deptID))

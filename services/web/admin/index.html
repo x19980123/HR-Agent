@@ -996,7 +996,9 @@
           <div class="section-title">面试题 ${questions.length ? `(${questions.length})` : "（确认后面试后生成）"}</div>
           <div class="q-list">
             ${questions.length ? questions.map((q) =>
-              `<div class="q-item"><div class="cat">${esc(q.category || "general")}</div><p>${esc(q.question || "")}</p></div>`
+              `<div class="q-item"><div class="cat">${esc(q.category || "general")}</div><p>${esc(q.question || "")}</p>
+               ${q.reference_answer ? `<p class="muted" style="margin-top:.35rem"><strong>参考答案：</strong>${esc(q.reference_answer)}</p>` : ""}
+               ${(q.scoring_points && q.scoring_points.length) ? `<ul class="muted">${q.scoring_points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}</div>`
             ).join("") : `<div class="empty">候选人确认面试时间后才会生成题目</div>`}
           </div>
         </div>`;
@@ -1759,10 +1761,12 @@
             </select>
             <label>标签（逗号分隔）</label>
             <input id="bTags" value="${esc(((item && item.tags) || []).join(", "))}" placeholder="go, mysql, 分布式" />
-            <label>正文（长文会自动分块入库）</label>
-            <textarea id="bContent" style="min-height:160px" placeholder="题目 / 知识点 / 参考要点…">${esc(item && item.content || "")}</textarea>
+            <label>正文（仅题干入向量库）</label>
+            <textarea id="bContent" style="min-height:120px" placeholder="面试题干…">${esc(item && item.content || "")}</textarea>
+            <label>参考答案（仅存 MySQL）</label>
+            <textarea id="bAnswer" style="min-height:100px" placeholder="标准参考答案…">${esc(item && item.reference_answer || "")}</textarea>
             <label class="check">
-              <input type="checkbox" id="bEnabled" ${(item ? item.enabled !== false : true) ? "checked" : ""} /> 启用（写入向量库）
+              <input type="checkbox" id="bEnabled" ${(item ? item.enabled !== false : true) ? "checked" : ""} /> 启用（仅题干写入向量库）
             </label>
             <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem">
               <button class="btn" id="bCancel">取消</button>
@@ -1779,6 +1783,7 @@
           difficulty: $("bDiff").value,
           tags: $("bTags").value.split(/[,，]/).map((t) => t.trim()).filter(Boolean),
           content: $("bContent").value.trim(),
+          reference_answer: $("bAnswer").value.trim(),
           enabled: $("bEnabled").checked,
         };
         if (!payload.content) { showToast("正文不能为空", true); return; }

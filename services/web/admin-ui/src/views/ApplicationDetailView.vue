@@ -6,6 +6,8 @@ import {
   NButton,
   NCard,
   NCheckbox,
+  NCollapse,
+  NCollapseItem,
   NGrid,
   NGi,
   NSpace,
@@ -27,6 +29,7 @@ import {
   advanceRound,
   updateOffer,
   manualSchedule,
+  sendInterviewerPack,
   listInterviewers,
   listInterviewerPools,
   CONTACT_SOURCE_LABEL,
@@ -34,6 +37,8 @@ import {
   type InterviewRound,
   type InterviewerProfile,
   type InterviewerPool,
+  type InterviewQuestionItem,
+  type InterviewerPackLink,
   type OfferStatus,
 } from "@/api/admin";
 import StatusTag from "@/components/StatusTag.vue";
@@ -163,8 +168,42 @@ const alertDetail = computed(() => {
 
 const questionList = computed(() => {
   const q = app.value?.questions;
-  return Array.isArray(q) ? q : [];
+  return Array.isArray(q) ? (q as InterviewQuestionItem[]) : [];
 });
+
+const interviewerPack = computed(() => {
+  const p = app.value?.interviewer_pack;
+  return Array.isArray(p) ? (p as InterviewerPackLink[]) : [];
+});
+
+const sendingPack = ref(false);
+
+async function onSendInterviewerPack() {
+  if (!app.value?.id) return;
+  sendingPack.value = true;
+  try {
+    const res = await sendInterviewerPack(app.value.id);
+    notify.success("题单邮件已发送（无邮箱的面试官请在下方复制链接）");
+    if (res.interviewer_pack?.length) {
+      app.value = { ...app.value, interviewer_pack: res.interviewer_pack };
+    } else {
+      await load();
+    }
+  } catch (e) {
+    notify.from(e, "发送失败");
+  } finally {
+    sendingPack.value = false;
+  }
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    notify.success("已复制");
+  } catch {
+    notify.warning("复制失败，请手动选择链接");
+  }
+}
 
 const jdTitle = computed(() => {
   const j = app.value?.jd as { title?: string } | undefined;
@@ -584,15 +623,50 @@ const auditDesc = computed(() => [...(app.value?.audit || [])].reverse());
         </NGrid>
 
         <NCard v-if="questionList.length" title="出题 Agent 产出" size="small" style="margin-top: 1rem">
-          <div v-for="(q, i) in questionList.slice(0, 8)" :key="i" style="margin-bottom: 0.5rem; font-size: 0.9rem">
-            <NText depth="3">{{ q.category || "题目" }}</NText>
-            — {{ q.question }}
-          </div>
-          <NText v-if="questionList.length > 8" depth="3">…共 {{ questionList.length }} 题</NText>
+          <NCollapse>
+            <NCollapseItem
+              v-for="(q, i) in questionList.slice(0, 12)"
+              :key="i"
+              :title="`${i + 1}. ${q.category || '题目'} — ${(q.question || '').slice(0, 48)}${(q.question || '').length > 48 ? '…' : ''}`"
+            >
+              <p style="margin: 0 0 0.5rem; line-height: 1.55">{{ q.question }}</p>
+              <NText depth="3" style="display: block; font-size: 0.85rem">参考答案</NText>
+              <p style="margin: 0.25rem 0; white-space: pre-wrap; line-height: 1.5">{{ q.reference_answer || "—" }}</p>
+              <ul v-if="q.scoring_points?.length" style="margin: 0.35rem 0 0; padding-left: 1.2rem; color: var(--n-text-color-3)">
+                <li v-for="(pt, j) in q.scoring_points" :key="j">{{ pt }}</li>
+              </ul>
+            </NCollapseItem>
+          </NCollapse>
+          <NText v-if="questionList.length > 12" depth="3">…共 {{ questionList.length }} 题</NText>
         </NCard>
       </NTabPane>
 
       <NTabPane name="interview" tab="面试">
+        <NCard v-if="interviewerPack.length || questionList.length" title="面试官题单" size="small" style="margin-bottom: 1rem">
+          <NText depth="3" style="display: block; margin-bottom: 0.75rem">
+            候选人确认且题目生成后，可向本轮面试官发送限时链接（含参考答案，请勿转发）。
+          </NText>
+          <NSpace style="margin-bottom: 0.75rem">
+            <NButton type="primary" size="small" :loading="sendingPack" :disabled="!questionList.length" @click="onSendInterviewerPack">
+              发送题单邮件
+            </NButton>
+          </NSpace>
+          <div v-if="interviewerPack.length">
+            <div
+              v-for="lk in interviewerPack"
+              :key="lk.open_id"
+              style="border-top: 1px solid rgba(0,0,0,.06); padding: 0.65rem 0"
+            >
+              <NText strong>{{ lk.name || lk.open_id }}</NText>
+              <NText depth="3" style="display: block; font-size: 0.85rem">{{ lk.email || "无邮箱，请复制链接" }}</NText>
+              <NText depth="3" style="font-size: 0.8rem">失效：{{ fmtTime(lk.expires_at) }}</NText>
+              <NSpace size="small" style="margin-top: 0.35rem">
+                <NButton size="tiny" @click="copyText(lk.url)">复制链接</NButton>
+              </NSpace>
+            </div>
+          </div>
+          <NText v-else depth="3">保存后将自动尝试发邮件；也可点击上方按钮重发。</NText>
+        </NCard>
         <NCard v-if="canManualSchedule" title="HR 人工排期" size="small" style="margin-bottom: 1rem">
           <NText depth="3" style="display: block; margin-bottom: 0.75rem">
             人工接管约面：从「面试官档案 / 面试池」指定人选，再选手动时段或自动找空档。不手填 open_id。

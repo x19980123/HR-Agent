@@ -73,7 +73,8 @@ export type ApplicationDetail = ApplicationSummary & {
   hired_at?: string;
   profile?: Record<string, unknown>;
   screen?: Record<string, unknown>;
-  questions?: { category?: string; question?: string }[];
+  questions?: InterviewQuestionItem[];
+  interviewer_pack?: InterviewerPackLink[];
   slots?: { status?: string; starts_at?: string; ends_at?: string; location?: string }[];
   audit?: {
     action: string;
@@ -105,6 +106,25 @@ export type QuestionBankItem = {
   enabled?: boolean;
   tags?: string[];
   content?: string;
+  reference_answer?: string;
+  scoring_points?: string[];
+};
+
+export type InterviewQuestionItem = {
+  category?: string;
+  question?: string;
+  difficulty?: string;
+  reference_answer?: string;
+  scoring_points?: string[];
+  estimated_minutes?: number;
+};
+
+export type InterviewerPackLink = {
+  open_id: string;
+  name?: string;
+  email?: string;
+  url: string;
+  expires_at?: string;
 };
 
 export type StaffMember = {
@@ -372,6 +392,13 @@ export async function manualSchedule(
   return api<{ ok: boolean; application?: ApplicationDetail }>(
     `/v1/admin/applications/${appId}/manual-schedule`,
     { method: "POST", json: body },
+  );
+}
+
+export async function sendInterviewerPack(appId: string) {
+  return api<{ ok: boolean; interviewer_pack?: InterviewerPackLink[] }>(
+    `/v1/admin/applications/${appId}/interviewer-pack/send`,
+    { method: "POST", json: {} },
   );
 }
 

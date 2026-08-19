@@ -44,6 +44,8 @@ const form = ref({
   difficulty: "medium",
   tags: "",
   content: "",
+  reference_answer: "",
+  scoring_points: "",
   enabled: true,
 });
 
@@ -85,7 +87,7 @@ async function load() {
 
 function openNew() {
   editing.value = null;
-  form.value = { title: "", category: "other", difficulty: "medium", tags: "", content: "", enabled: true };
+  form.value = { title: "", category: "other", difficulty: "medium", tags: "", content: "", reference_answer: "", scoring_points: "", enabled: true };
   showModal.value = true;
 }
 
@@ -98,6 +100,8 @@ async function openEdit(id: string) {
     difficulty: item.difficulty || "medium",
     tags: (item.tags || []).join(", "),
     content: item.content || "",
+    reference_answer: item.reference_answer || "",
+    scoring_points: (item.scoring_points || []).join(", "),
     enabled: item.enabled !== false,
   };
   showModal.value = true;
@@ -114,6 +118,8 @@ async function save() {
     difficulty: form.value.difficulty,
     tags: form.value.tags.split(/[,，]/).map((t) => t.trim()).filter(Boolean),
     content: form.value.content.trim(),
+    reference_answer: form.value.reference_answer.trim(),
+    scoring_points: form.value.scoring_points.split(/[,，]/).map((t) => t.trim()).filter(Boolean),
     enabled: form.value.enabled,
   };
   try {
@@ -181,7 +187,7 @@ onMounted(load);
   </NSpace>
   <NCard style="margin-bottom: 1rem">
     <NText depth="3" style="display: block; margin-bottom: 0.5rem">
-      批量 CSV 列：<code>title, category, content, difficulty, tags, enabled, jd_id</code>（后四列可空；enabled 用 1/0）
+      批量 CSV 列：<code>title, category, content, difficulty, tags, enabled, jd_id, reference_answer, scoring_points</code>（后几列可空；enabled 用 1/0）
     </NText>
     <NSpace align="center">
       <NUpload v-model:file-list="csvFiles" :max="1" accept=".csv">
@@ -201,10 +207,16 @@ onMounted(load);
       <NFormItem label="分类"><NSelect v-model:value="form.category" :options="catOptions" /></NFormItem>
       <NFormItem label="难度"><NSelect v-model:value="form.difficulty" :options="diffOptions" /></NFormItem>
       <NFormItem label="标签"><NInput v-model:value="form.tags" placeholder="逗号分隔" /></NFormItem>
-      <NFormItem label="正文">
+      <NFormItem label="正文（仅题干入向量库）">
         <NInput v-model:value="form.content" type="textarea" :autosize="{ minRows: 6, maxRows: 12 }" />
       </NFormItem>
-      <NCheckbox v-model:checked="form.enabled">启用（写入向量库）</NCheckbox>
+      <NFormItem label="参考答案（仅存 MySQL）">
+        <NInput v-model:value="form.reference_answer" type="textarea" :autosize="{ minRows: 4, maxRows: 10 }" />
+      </NFormItem>
+      <NFormItem label="得分点（逗号分隔）">
+        <NInput v-model:value="form.scoring_points" placeholder="概念正确, 能结合项目" />
+      </NFormItem>
+      <NCheckbox v-model:checked="form.enabled">启用（仅题干写入向量库，答案只存 MySQL）</NCheckbox>
     </NForm>
     <template #footer>
       <NSpace justify="end">

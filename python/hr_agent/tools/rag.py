@@ -74,6 +74,7 @@ def _normalize_item(raw: dict[str, Any]) -> dict[str, Any] | None:
             tags = [t.strip() for t in tags.split(",") if t.strip()]
     if not isinstance(tags, list):
         tags = []
+    # Vector index stores question stem only; answers stay in MySQL.
     return {
         "id": item_id,
         "category": str(raw.get("category") or "fundamentals"),

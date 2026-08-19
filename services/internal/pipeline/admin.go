@@ -233,6 +233,16 @@ func (s *Service) GetApplicationDetail(ctx context.Context, appID string) (map[s
 		}
 		app["audit"] = audits
 	}
+	if links, lerr := s.BuildInterviewerPackLinks(ctx, appID); lerr == nil && len(links) > 0 {
+		pack := make([]map[string]any, 0, len(links))
+		for _, lk := range links {
+			pack = append(pack, map[string]any{
+				"open_id": lk.OpenID, "name": lk.Name, "email": lk.Email,
+				"url": lk.URL, "expires_at": lk.ExpiresAt,
+			})
+		}
+		app["interviewer_pack"] = pack
+	}
 	return app, nil
 }
 

@@ -43,6 +43,9 @@ func (s *Service) PublicReplyView(ctx context.Context, token string) (*PublicRep
 	if err != nil {
 		return nil, err
 	}
+	if claims.Purpose != "" && claims.Purpose != replytoken.PurposeCandidateReply {
+		return nil, replytoken.ErrInvalid
+	}
 	var name, email, status, jdID string
 	var rescheduleCount int
 	err = s.DB.QueryRowContext(ctx,

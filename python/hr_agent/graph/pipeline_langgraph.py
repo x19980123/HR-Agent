@@ -145,10 +145,11 @@ def run_generate_questions(
     application_id: str,
     profile: dict[str, Any],
     jd: dict[str, Any],
+    bank_hints: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     _ = application_id
     p = CandidateProfile.model_validate(profile or {})
-    qs = generate_questions(p, jd or {})
+    qs = generate_questions(p, jd or {}, bank_hints=bank_hints)
     return {
         "questions": [q.model_dump() for q in qs],
         "error": "",

@@ -32,6 +32,7 @@ try:
         application_id: str = ""
         profile: dict = Field(default_factory=dict)
         jd: dict = Field(default_factory=dict)
+        bank_hints: list[dict] = Field(default_factory=list)
 
     class ClassifyReq(BaseModel):
         application_id: str
@@ -125,6 +126,7 @@ try:
                 application_id=req.application_id,
                 profile=req.profile,
                 jd=req.jd,
+                bank_hints=req.bank_hints or None,
             )
             out["langsmith_run_id"] = os.getenv("LANGSMITH_RUN_ID", "")
             return out

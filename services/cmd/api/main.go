@@ -12,6 +12,7 @@ import (
 	"github.com/hr-agent/services/internal/calendar"
 	"github.com/hr-agent/services/internal/config"
 	"github.com/hr-agent/services/internal/db"
+	"github.com/hr-agent/services/internal/feishucontact"
 	"github.com/hr-agent/services/internal/mail"
 	"github.com/hr-agent/services/internal/pipeline"
 	"github.com/hr-agent/services/web"
@@ -42,12 +43,13 @@ func main() {
 	log.Printf("calendar provider: %s", cfg.CalendarProvider)
 
 	svc := &pipeline.Service{
-		DB:       sqlDB,
-		Cfg:      cfg,
-		Agent:    agentclient.New(cfg.AgentBaseURL),
-		Calendar: cal,
-		Mail:     mailer,
-		Audit:    &audit.Logger{DB: sqlDB},
+		DB:            sqlDB,
+		Cfg:           cfg,
+		Agent:         agentclient.New(cfg.AgentBaseURL),
+		Calendar:      cal,
+		Mail:          mailer,
+		Audit:         &audit.Logger{DB: sqlDB},
+		FeishuContact: feishucontact.New(cfg.FeishuAppID, cfg.FeishuAppSecret),
 	}
 	if err := svc.BootstrapSeedAdmin(context.Background()); err != nil {
 		log.Printf("staff bootstrap: %v", err)
@@ -59,7 +61,7 @@ func main() {
 	if _, src := web.AdminIndexHTML(); src != "" {
 		log.Printf("admin UI source: %s", src)
 	}
-	log.Printf("go api listening on %s (admin=/admin candidate=/r/{token})", cfg.HTTPAddr)
+	log.Printf("go api listening on %s (admin=/admin candidate=/r/{token} interviewer=/i/{token})", cfg.HTTPAddr)
 	if err := http.ListenAndServe(cfg.HTTPAddr, srv.Routes()); err != nil {
 		log.Fatal(err)
 	}

@@ -55,9 +55,10 @@ type PipelineResponse struct {
 }
 
 type QuestionsRequest struct {
-	ApplicationID string         `json:"application_id"`
-	Profile       map[string]any `json:"profile"`
-	JD            map[string]any `json:"jd"`
+	ApplicationID string           `json:"application_id"`
+	Profile       map[string]any   `json:"profile"`
+	JD            map[string]any   `json:"jd"`
+	BankHints     []map[string]any `json:"bank_hints,omitempty"`
 }
 
 type QuestionsResponse struct {
@@ -207,6 +208,19 @@ func (c *Client) RAGReindex(ctx context.Context, items []map[string]any) (map[st
 		return nil, err
 	}
 	return out, nil
+}
+
+func (c *Client) RAGQuery(ctx context.Context, query string, k int) ([]map[string]any, error) {
+	if k <= 0 {
+		k = 4
+	}
+	var out struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := c.post(ctx, "/v1/rag/query", map[string]any{"query": query, "k": k}, &out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
 }
 
 func (c *Client) post(ctx context.Context, path string, in any, out any) error {

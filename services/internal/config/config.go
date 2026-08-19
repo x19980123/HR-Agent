@@ -27,6 +27,7 @@ type Config struct {
 	IMAPUser          string
 	IMAPPass          string
 	ReplyTimeoutHours int
+	InterviewerPackHours int
 	MaxReschedule     int
 
 	PublicBaseURL     string
@@ -86,8 +87,9 @@ func Load() (*Config, error) {
 		IMAPPort:          getenvInt("IMAP_PORT", 993),
 		IMAPUser:          getenv("IMAP_USER", ""),
 		IMAPPass:          getenv("IMAP_PASS", ""),
-		ReplyTimeoutHours: getenvInt("REPLY_TIMEOUT_HOURS", 48),
-		MaxReschedule:     getenvInt("MAX_RESCHEDULE", 2),
+		ReplyTimeoutHours:    getenvInt("REPLY_TIMEOUT_HOURS", 48),
+		InterviewerPackHours: getenvInt("INTERVIEWER_PACK_HOURS", 24),
+		MaxReschedule:        getenvInt("MAX_RESCHEDULE", 2),
 
 		PublicBaseURL:    stringsTrimRightSlash(getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8080")),
 		ReplyTokenSecret: getenv("REPLY_TOKEN_SECRET", "dev-reply-secret-change-me"),
@@ -230,6 +232,14 @@ func getenvBool(k string, def bool) bool {
 
 func (c *Config) ReplyTimeout() time.Duration {
 	return time.Duration(c.ReplyTimeoutHours) * time.Hour
+}
+
+func (c *Config) InterviewerPackTimeout() time.Duration {
+	h := c.InterviewerPackHours
+	if h <= 0 {
+		h = 24
+	}
+	return time.Duration(h) * time.Hour
 }
 
 func stringsTrimRightSlash(s string) string {

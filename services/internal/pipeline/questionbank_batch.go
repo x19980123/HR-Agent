@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// ParseQuestionBankCSV reads title,category,content[,difficulty][,tags][,enabled][,jd_id].
+// ParseQuestionBankCSV reads title,category,content[,difficulty][,tags][,enabled][,jd_id][,reference_answer][,scoring_points].
 func ParseQuestionBankCSV(r io.Reader) ([]QuestionBankInput, error) {
 	cr := csv.NewReader(r)
 	cr.TrimLeadingSpace = true
@@ -21,7 +21,7 @@ func ParseQuestionBankCSV(r io.Reader) ([]QuestionBankInput, error) {
 		if len(rec) == 0 {
 			continue
 		}
-		for len(rec) < 7 {
+		for len(rec) < 9 {
 			rec = append(rec, "")
 		}
 		title := strings.TrimSpace(rec[0])
@@ -50,9 +50,19 @@ func ParseQuestionBankCSV(r io.Reader) ([]QuestionBankInput, error) {
 		if e := strings.TrimSpace(strings.ToLower(rec[5])); e == "0" || e == "false" || e == "no" {
 			enabled = false
 		}
+		scoring := []string{}
+		if sp := strings.TrimSpace(rec[8]); sp != "" {
+			for _, p := range strings.FieldsFunc(sp, func(r rune) bool { return r == ',' || r == '，' || r == ';' }) {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					scoring = append(scoring, p)
+				}
+			}
+		}
 		out = append(out, QuestionBankInput{
 			Title: title, Category: cat, Content: content, Difficulty: diff,
 			Tags: tags, JDID: strings.TrimSpace(rec[6]), Enabled: &enabled,
+			ReferenceAnswer: strings.TrimSpace(rec[7]), ScoringPoints: scoring,
 		})
 	}
 	if len(out) == 0 {
